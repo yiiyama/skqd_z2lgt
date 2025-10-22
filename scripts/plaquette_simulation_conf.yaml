@@ -1,0 +1,22 @@
+---
+lattice_config: |2
+   * * * *
+  * * * *
+   * * * *
+  * * * *
+   * * * *
+  * * * *
+plaquette_energy: 0.7
+delta_t: DELTAT
+steps: 8
+num_shots: 100000
+simulator_options:
+   method: statevector
+   device: GPU
+   max_parallel_experiments: 0
+   num_threads_per_device: 32
+   #cuStateVec_enable: true
+   #blocking_enable: true
+   #blocking_qubits: 27
+   #batched_shots_gpu: true
+   #batched_shots_gpu_max_qubits: 30

@@ -1,0 +1,22 @@
+---
+lattice_config: |2
+   * * *
+  * * * *
+   * * *
+plaquette_energy: 1.
+delta_t: 0.1
+steps: [1]
+num_shots: 16
+basis_2q: cz
+#instance: ICEPP-dedicated-temp-prem-us
+#backend_name: ibm_torino
+noise_model: /data/iiyama/2dz2/torino_19links_noise_model.pkl
+simulator_options:
+   method: statevector
+   device: GPU
+   num_threads_per_device: 4
+   #cuStateVec_enable: true
+   #blocking_enable: true
+   #blocking_qubits: 27
+   #batched_shots_gpu: true
+   #batched_shots_gpu_max_qubits: 30
