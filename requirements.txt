@@ -1,0 +1,11 @@
+numpy
+scipy
+h5py
+jax[cuda12]
+optax
+flax
+qiskit>=2.1.0
+qiskit-ibm-runtime>=0.41.0
+qiskit-addon-sqd
+rustworkx
+pymatching

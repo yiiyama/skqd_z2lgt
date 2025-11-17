@@ -1,0 +1,20 @@
+---
+lgt:
+  lattice: |2
+     * * *
+    * * * *
+     * * *
+  plaquette_energy: 1.
+  charged_vertices: [0, 4]
+dmrg:
+  julia_sysimage: /opt/julia/iiyama/sysimages/sys_itensors.so
+skqd:
+  dt: 0.25
+runtime:
+#  job_id: 'd49vrc7nmdfs73accpb0'  # 156q [0, 5] K=1.0 dt=0.25
+  job_id: 'd4b8712489vs73a36f7g'  # 19q [0, 4] K=1.0 dt=0.25 shots=10000
+  instance: 'ICEPP-dedicated'
+  backend: 'ibm_kawasaki'
+  shots: 10000
+# output_filename: '/data/iiyama/2dz2/kawasaki_64plaq_K1.0_dt0.25_q_0_5.h5'
+pkgpath: '/data/iiyama/2dz2/kawasaki_10plaq_K1.0_dt0.25_q_0_4'
