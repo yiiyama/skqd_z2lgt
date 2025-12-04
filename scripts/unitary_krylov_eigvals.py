@@ -3,7 +3,7 @@ from pathlib import Path
 import numpy as np
 import h5py
 import jax
-sys.path.append(Path(__file__).parents[1] / 'lib')
+sys.path.append(str(Path(__file__).parents[1] / 'lib'))
 from unitary_krylov import compute_gen_eigvals
 
 jax.config.update('jax_enable_x64', True)

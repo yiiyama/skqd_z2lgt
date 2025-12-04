@@ -168,8 +168,7 @@ def compute_gen_eigvals(config, plaquette_energy, krylov_dim, delta_ts, num_subs
                 matrices.append((krylov_matrix, psi_matrix))
             return matrices
 
-        with jax.default_device(jax.devices()[1]):
-            matrices = make_geneigval_problems()
+        matrices = make_geneigval_problems()
 
         for idim, (krylov_matrix, psi_matrix) in enumerate(matrices):
             gen_eigvals[idt, idim] = eigvalsh(krylov_matrix, psi_matrix)
