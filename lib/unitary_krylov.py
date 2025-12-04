@@ -23,8 +23,8 @@ def make_hvec(hamiltonian):
         state = state.reshape(shape_extra + (2,) * nq)
         result = jnp.zeros_like(state)
         for pauli in hamiltonian.paulis:
-            zs = np.nonzero(pauli.z[::-1])[0]
-            xs = np.nonzero(pauli.x[::-1])[0]
+            zs = np.nonzero(pauli.z[::-1])[0].astype(np.int64)
+            xs = np.nonzero(pauli.x[::-1])[0].astype(np.int64)
             if zs.shape[0] == 1:
                 shape = list(shape_template)
                 shape[zs[0]] = 2
@@ -63,7 +63,7 @@ def make_trotter_uvec(hamiltonian, delta_t):
     @jax.jit
     def apply_diag(result):
         for pauli in hamiltonian.paulis:
-            zs = np.nonzero(pauli.z[::-1])[0]
+            zs = np.nonzero(pauli.z[::-1])[0].astype(np.int64)
             if zs.shape[0] == 1:
                 shape = list(shape_template)
                 shape[zs[0]] = 2
@@ -77,12 +77,11 @@ def make_trotter_uvec(hamiltonian, delta_t):
 
     @jax.jit
     def trotter_uvec(state):
-        state = state.reshape((2,) * nq)
-        result = state.copy()
+        result = state.reshape((2,) * nq)
         result = apply_diag(result)
 
         for pauli in hamiltonian.paulis:
-            xs = np.nonzero(pauli.x[::-1])[0]
+            xs = np.nonzero(pauli.x[::-1])[0].astype(np.int64)
             if xs.shape[0] == 1:
                 result = jnp.moveaxis(jnp.tensordot(rx_mat, result, ([1], [xs[0]])), 0, xs[0])
 
@@ -113,6 +112,21 @@ def simulate(trotter_uvec, nplaq, krylov_dim, num_substeps=2, psi0=None):
 
     psis = jax.lax.scan(f, psi0, length=krylov_dim)[1]
     return jnp.concatenate([psi0[None, :], psis], axis=0)
+
+
+@partial(jax.jit, static_argnums=[0, 1, 2, 3])
+def sample(trotter_uvec, nplaq, num_steps, shots, psi0=None):
+    state = psi0
+    if state is None:
+        state = jax.nn.one_hot(0, 2 ** nplaq, dtype=np.complex128)
+
+    for _ in range(num_steps):
+        state = trotter_uvec(state)
+    cumprobs = jnp.cumsum(jnp.square(jnp.abs(state)))
+
+    key = jax.random.key(1234 + num_steps)
+    xvals = jax.random.uniform(key, shots)
+    return jnp.searchsorted(cumprobs, xvals)
 
 
 def exact_diag(config, plaquette_energy):
