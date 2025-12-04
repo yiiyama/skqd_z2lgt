@@ -141,8 +141,6 @@ def compute_gen_eigvals(config, plaquette_energy, krylov_dim, delta_ts, num_subs
 
     hamiltonian = dual_lattice.make_hamiltonian(plaquette_energy)
     hvec = make_hvec(hamiltonian)
-    if delta_ts is None:
-        delta_ts = np.linspace(0.002, 0.502, 101)
 
     gen_eigvals = np.empty(delta_ts.shape + (krylov_dim + 1,))
     for idt, delta_t in enumerate(delta_ts):
@@ -162,15 +160,17 @@ def compute_gen_eigvals(config, plaquette_energy, krylov_dim, delta_ts, num_subs
                 krylov_matrix = jnp.einsum('ij,kj->ik', psi_sim[:kdim].conjugate(), hpsi_sim[:kdim])
                 psi_matrix = jnp.einsum('ij,kj->ik', psi_sim[:kdim].conjugate(), psi_sim[:kdim])
                 psi_eigvals, psi_unitary = jnp.linalg.eigh(psi_matrix)
+                start_dim = jnp.searchsorted(psi_eigvals, gep_threshold)
                 psi_unitary_trunc = psi_unitary * jnp.asarray(psi_eigvals > gep_threshold)
                 krylov_matrix = psi_unitary_trunc.conjugate().T @ krylov_matrix @ psi_unitary_trunc
                 psi_matrix = psi_unitary_trunc.conjugate().T @ psi_matrix @ psi_unitary_trunc
-                matrices.append((krylov_matrix, psi_matrix))
+                matrices.append((krylov_matrix, psi_matrix, start_dim))
             return matrices
 
         matrices = make_geneigval_problems()
 
-        for idim, (krylov_matrix, psi_matrix) in enumerate(matrices):
-            gen_eigvals[idt, idim] = eigvalsh(krylov_matrix, psi_matrix)
+        for idim, (krylov_matrix, psi_matrix, start_dim) in enumerate(matrices):
+            gen_eigvals[idt, idim] = eigvalsh(krylov_matrix[start_dim:, start_dim:],
+                                              psi_matrix[start_dim:, start_dim:])[0]
 
     return gen_eigvals
