@@ -9,17 +9,17 @@ from heavyhex_qft.triangular_z2 import TriangularZ2Lattice
 from skqd_z2lgt.jax_experimental_sparse_linalg import lobpcg_standard
 
 
-def make_hvec(hamiltonian, variable=False):
+def make_hvec(hamiltonian, variable=False, dtype=np.complex128):
     nq = hamiltonian.num_qubits
-    z_arr = np.array([1., -1.], dtype=np.complex128)
-    zz_arr = np.array([[1., -1.], [-1., 1.]], dtype=np.complex128)
+    z_arr = np.array([1., -1.], dtype=dtype)
+    zz_arr = np.array([[1., -1.], [-1., 1.]], dtype=dtype)
     shape_template = [1] * nq
 
     def hvec(state, plaquette_energy=None):
         shape_extra = state.shape[:-1]
         state = state.reshape(shape_extra + (2,) * nq)
         result = jnp.zeros_like(state)
-        for pauli, coeff in zip(hamiltonian.paulis, hamiltonian.coeffs):
+        for pauli, coeff in zip(hamiltonian.paulis, hamiltonian.coeffs.real):
             zs = np.nonzero(pauli.z[::-1])[0].astype(np.int64)
             xs = np.nonzero(pauli.x[::-1])[0].astype(np.int64)
             if zs.shape[0] == 1:
