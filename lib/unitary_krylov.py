@@ -6,7 +6,8 @@ import jax
 import jax.numpy as jnp
 from jax.experimental.ode import odeint
 from heavyhex_qft.triangular_z2 import TriangularZ2Lattice
-from skqd_z2lgt.jax_experimental_sparse_linalg import lobpcg_standard
+from skqd_z2lgt.sqd import get_hamiltonian_arrays
+from skqd_z2lgt.ground_locg import ground_locg
 
 
 def make_hvec(hamiltonian, variable=False, dtype=np.complex128):
@@ -157,15 +158,11 @@ def exact_diag(config, plaquette_energy):
     hvec = make_hvec(hamiltonian)
 
     @jax.jit
-    def compute(xmat):
-        # pylint: disable-next=unbalanced-tuple-unpacking
-        vals, vecs, _ = lobpcg_standard(lambda x: -hvec(x.T).T, xmat)
-        return -vals, vecs
+    def compute():
+        eigval, eigvec, _ = ground_locg(hvec, 0, vspace=(2 ** nplaq, np.float64))
+        return eigval, eigvec
 
-    xmat = np.zeros((2 ** nplaq, 2), dtype=np.complex128)
-    xmat[0, 0] = 1.
-    xmat[1 << np.arange(nplaq), 1] = 1. / np.sqrt(nplaq)
-    return compute(xmat)
+    return compute()
 
 
 def compute_gen_eigvals(config, plaquette_energy, krylov_dim, delta_ts, num_substeps=2):
