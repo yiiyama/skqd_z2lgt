@@ -6,7 +6,7 @@ import jax.numpy as jnp
 
 def make_apply_h(hamiltonian, sh_qubit=None):
     """Apply-H highly optimized for the Ising Hamiltonian of the 2D Z2 LGT.
-    
+
     Supply a NamedSharding compatible with a shape (2,) * nq array if sharding the input vector.
     """
     z_coeffs = {}
@@ -88,3 +88,104 @@ def make_apply_h(hamiltonian, sh_qubit=None):
         return result.reshape(-1, out_sharding=jax.typeof(vec).sharding)
 
     return apply_h
+
+
+def make_apply_u(hamiltonian, sh_qubit=None):
+    """Apply-U highly optimized for the Ising Hamiltonian of the 2D Z2 LGT.
+
+    Supply a NamedSharding compatible with a shape (2,) * nq array if sharding the input vector.
+    """
+    z_coeffs = {}
+    zz_coeffs = {}
+    plaquette_energy = 0.
+
+    # We know coeffs are all real
+    for pauli, coeff in zip(hamiltonian.paulis, hamiltonian.coeffs.real):
+        zs = np.nonzero(pauli.z[::-1])[0].astype(np.int64)
+        if zs.shape[0] == 1:
+            if zs[0] in z_coeffs:
+                z_coeffs[zs[0]] += coeff
+            else:
+                z_coeffs[zs[0]] = coeff
+        elif zs.shape[0] == 2:
+            key = (zs[0], zs[1])
+            if key in zz_coeffs:
+                zz_coeffs[key] += coeff
+            else:
+                zz_coeffs[key] = coeff
+        else:
+            # We know there are only ZZ, Z, and X terms, and there is one X term per qubit
+            plaquette_energy = -coeff
+
+    nq = hamiltonian.num_qubits
+
+    def make_apply_rz(axis, coeff):
+        def apply_rz(vec, dt):
+            # lattice.electric_evolution(dt) -> Rz(2 * coeff * dt) = exp(-1.j * coeff * dt * Z)
+            axes = list(range(nq))
+            axes.remove(axis)
+            exponent = -1.j * coeff * dt
+            pp = jnp.exp(exponent)
+            pm = jnp.exp(-exponent)
+            return jnp.expand_dims(jnp.array([pp, pm]), tuple(axes)) * vec
+
+        return apply_rz
+
+    def make_apply_rzz(axis1, axis2, coeff):
+        def apply_rzz(vec, dt):
+            # lattice.electric_evolution(dt) -> Rzz(2 * coeff * dt) = exp(-1.j * coeff * dt * ZZ)
+            axes = list(range(nq))
+            axes.remove(axis1)
+            axes.remove(axis2)
+            exponent = -1.j * coeff * dt
+            pp = jnp.exp(exponent)
+            pm = jnp.exp(-exponent)
+            return jnp.expand_dims(jnp.array([[pp, pm], [pm, pp]]), tuple(axes)) * vec
+
+        return apply_rzz
+
+    def make_apply_rx(axis):
+        def apply_rx(vec, dt):
+            # lattice.magnetic_evolution(dt) -> Rx(-2 * lambda * dt) = exp(1.j * lambda * dt * X)
+            angle = plaquette_energy * dt
+            di = jnp.cos(angle)
+            od = 1.j * jnp.sin(angle)
+            mat = jnp.array([[di, od], [od, di]])
+            vec = jnp.moveaxis(vec, axis, -1)
+            vec = mat @ vec
+            vec = jnp.moveaxis(vec, -1, axis)
+            return vec
+
+        return apply_rx
+
+    z_fns = [make_apply_rz(ax, c) for ax, c in z_coeffs.items()]
+    zz_fns = [make_apply_rzz(axs[0], axs[1], c) for axs, c in zz_coeffs.items()]
+    x_fns = [make_apply_rx(ax) for ax in range(nq)]
+
+    def z_body(iop, val):
+        vec, dt = val
+        vec = jax.lax.switch(iop, z_fns, vec, dt)
+        return (vec, dt)
+
+    def zz_body(iop, val):
+        vec, dt = val
+        vec = jax.lax.switch(iop, zz_fns, vec, dt)
+        return (vec, dt)
+
+    def x_body(iop, val):
+        vec, dt = val
+        vec = jax.lax.switch(iop, x_fns, vec, dt)
+        return (vec, dt)
+
+    @jax.jit
+    def apply_u(vec, dt):
+        sh_original = jax.typeof(vec).sharding
+        vec = vec.reshape((2,) * nq, out_sharding=sh_qubit)
+        vec = jax.lax.fori_loop(0, len(z_fns), z_body, (vec, 0.5 * dt))[0]
+        vec = jax.lax.fori_loop(0, len(zz_fns), zz_body, (vec, 0.5 * dt))[0]
+        vec = jax.lax.fori_loop(0, len(x_fns), x_body, (vec, dt))[0]
+        vec = jax.lax.fori_loop(0, len(z_fns), z_body, (vec, 0.5 * dt))[0]
+        vec = jax.lax.fori_loop(0, len(zz_fns), zz_body, (vec, 0.5 * dt))[0]
+        return vec.reshape(-1, out_sharding=sh_original)
+
+    return apply_u
