@@ -152,7 +152,7 @@ def make_apply_u(hamiltonian, sh_qubit=None):
             od = 1.j * jnp.sin(angle)
             mat = jnp.array([[di, od], [od, di]])
             vec = jnp.moveaxis(vec, axis, -1)
-            vec = mat @ vec
+            vec = jnp.matvec(mat, vec)
             vec = jnp.moveaxis(vec, -1, axis)
             return vec
 
@@ -181,11 +181,15 @@ def make_apply_u(hamiltonian, sh_qubit=None):
     def apply_u(vec, dt):
         sh_original = jax.typeof(vec).sharding
         vec = vec.reshape((2,) * nq, out_sharding=sh_qubit)
-        vec = jax.lax.fori_loop(0, len(z_fns), z_body, (vec, 0.5 * dt))[0]
-        vec = jax.lax.fori_loop(0, len(zz_fns), zz_body, (vec, 0.5 * dt))[0]
+        if len(z_fns):
+            vec = jax.lax.fori_loop(0, len(z_fns), z_body, (vec, 0.5 * dt))[0]
+        if len(zz_fns):
+            vec = jax.lax.fori_loop(0, len(zz_fns), zz_body, (vec, 0.5 * dt))[0]
         vec = jax.lax.fori_loop(0, len(x_fns), x_body, (vec, dt))[0]
-        vec = jax.lax.fori_loop(0, len(z_fns), z_body, (vec, 0.5 * dt))[0]
-        vec = jax.lax.fori_loop(0, len(zz_fns), zz_body, (vec, 0.5 * dt))[0]
+        if len(z_fns):
+            vec = jax.lax.fori_loop(0, len(z_fns), z_body, (vec, 0.5 * dt))[0]
+        if len(zz_fns):
+            vec = jax.lax.fori_loop(0, len(zz_fns), zz_body, (vec, 0.5 * dt))[0]
         return vec.reshape(-1, out_sharding=sh_original)
 
     return apply_u

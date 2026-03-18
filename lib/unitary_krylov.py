@@ -11,6 +11,7 @@ from skqd_z2lgt.ground_locg import ground_locg
 
 
 def make_hvec(hamiltonian, variable=False, dtype=np.complex128):
+    """Make the Hv function. Use ising_hamiltonian.make_apply_h instead."""
     nq = hamiltonian.num_qubits
     z_arr = np.array([1., -1.], dtype=dtype)
     zz_arr = np.array([[1., -1.], [-1., 1.]], dtype=dtype)
@@ -52,6 +53,7 @@ def make_hvec(hamiltonian, variable=False, dtype=np.complex128):
 
 
 def make_trotter_uvec(hamiltonian, delta_t):
+    """Make the Uv function. Use ising_hamiltonian.make_apply_u instead."""
     # exp(-iHΔt)x
     nq = hamiltonian.num_qubits
     z_arr = np.array([1., -1.], dtype=np.complex128)
