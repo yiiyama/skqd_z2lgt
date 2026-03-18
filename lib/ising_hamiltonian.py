@@ -150,11 +150,7 @@ def make_apply_u(hamiltonian, sh_qubit=None):
             angle = plaquette_energy * dt
             di = jnp.cos(angle)
             od = 1.j * jnp.sin(angle)
-            mat = jnp.array([[di, od], [od, di]])
-            vec = jnp.moveaxis(vec, axis, -1)
-            vec = jnp.matvec(mat, vec)
-            vec = jnp.moveaxis(vec, -1, axis)
-            return vec
+            return di * vec + od * jnp.flip(vec, axis=axis)
 
         return apply_rx
 
