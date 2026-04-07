@@ -2,6 +2,7 @@
 import numpy as np
 import jax
 import jax.numpy as jnp
+from jax.sharding import NamedSharding, PartitionSpec
 
 
 def get_coeffs(hamiltonian):
@@ -30,7 +31,25 @@ def get_coeffs(hamiltonian):
     return z_coeffs, zz_coeffs, x_coeff
 
 
-def make_apply_h(hamiltonian, sh_qubit=None):
+def get_shape_and_shardings(vec, qubit_partitioning):
+    shape = tuple(2 ** np.array(qubit_partitioning))
+
+    sharding = jax.typeof(vec).sharding
+    if sharding.num_devices == 0:
+        return shape, None, None
+
+    in_spec = sharding.spec[0]  # ('X', 'Y', 'Z', ...)
+    partitions = ()
+    ipart = 0
+    for nq in qubit_partitioning:
+        partitions += (in_spec[ipart:ipart + nq],)
+        ipart += nq
+        if ipart >= len(in_spec):
+            break
+    return shape, sharding, NamedSharding(sharding.mesh, PartitionSpec(*partitions))
+
+
+def make_apply_h(hamiltonian):
     """Apply-H highly optimized for the Ising Hamiltonian of the 2D Z2 LGT.
 
     Supply a NamedSharding compatible with a shape (2,) * nq array if sharding the input vector.
@@ -39,30 +58,48 @@ def make_apply_h(hamiltonian, sh_qubit=None):
 
     def make_apply_z(qubit, coeff):
         def apply_z(vec):
-            shape = (2 ** (nq - qubit - 1), 2, 2 ** qubit)
+            qpart = (nq - qubit - 1, 1, qubit)
+            # shape, out_sharding, tmp_sharding = get_shape_and_shardings(vec, qpart)
+            shape = tuple(2 ** np.array(qpart))
+
             op = jnp.array([coeff, -coeff]).reshape((1, 2, 1))
+            # vec = jnp.reshape(vec, shape, out_sharding=tmp_sharding)
             vec = jnp.reshape(vec, shape)
             vec *= op
-            return jnp.reshape(vec, (2 ** nq,))
+            # vec = jnp.reshape(vec, (2 ** nq,), out_sharding=out_sharding)
+            vec = jnp.reshape(vec, (2 ** nq,))
+            return vec
 
         return apply_z
 
     def make_apply_zz(qubit1, qubit2, coeff):
         def apply_zz(vec):
-            shape = (2 ** (nq - qubit2 - 1), 2, 2 ** (qubit2 - qubit1 - 1), 2, 2 ** qubit1)
+            qpart = (nq - qubit2 - 1, 1, qubit2 - qubit1 - 1, 1, qubit1)
+            # shape, out_sharding, tmp_sharding = get_shape_and_shardings(vec, qpart)
+            shape = tuple(2 ** np.array(qpart))
+
             op = jnp.array([[coeff, -coeff], [-coeff, coeff]]).reshape((1, 2, 1, 2, 1))
+            # vec = jnp.reshape(vec, shape, out_sharding=tmp_sharding)
             vec = jnp.reshape(vec, shape)
             vec *= op
-            return jnp.reshape(vec, (2 ** nq,))
+            # vec = jnp.reshape(vec, (2 ** nq,), out_sharding=out_sharding)
+            vec = jnp.reshape(vec, (2 ** nq,))
+            return vec
 
         return apply_zz
 
     def make_apply_x(qubit):
         def apply_x(vec):
-            shape = (2 ** (nq - qubit - 1), 2, 2 ** qubit)
+            qpart = (nq - qubit - 1, 1, qubit)
+            # shape, out_sharding, tmp_sharding = get_shape_and_shardings(vec, qpart)
+            shape = tuple(2 ** np.array(qpart))
+
+            # vec = jnp.reshape(vec, shape, out_sharding=tmp_sharding)
             vec = jnp.reshape(vec, shape)
             vec = jnp.flip(vec, axis=1)
-            return jnp.reshape(vec, (2 ** nq,))
+            # vec = jnp.reshape(vec, (2 ** nq,), out_sharding=out_sharding)
+            vec = jnp.reshape(vec, (2 ** nq,))
+            return vec
 
         return apply_x
 
@@ -94,37 +131,53 @@ def make_apply_u(hamiltonian, sh_qubit=None):
     def make_apply_rz(qubit, coeff):
         def apply_rz(vec, dt):
             # lattice.electric_evolution(dt) -> Rz(2 * coeff * dt) = exp(-1.j * coeff * dt * Z)
-            shape = (2 ** (nq - qubit - 1), 2, 2 ** qubit)
+            qpart = (nq - qubit - 1, 1, qubit)
+            # shape, out_sharding, tmp_sharding = get_shape_and_shardings(vec, qpart)
+            shape = tuple(2 ** np.array(qpart))
+
             exponent = -1.j * coeff * dt
             op = jnp.exp(jnp.array([exponent, -exponent])).reshape((1, 2, 1))
+            # vec = jnp.reshape(vec, shape, out_sharding=tmp_sharding)
             vec = jnp.reshape(vec, shape)
             vec *= op
-            return jnp.reshape(vec, (2 ** nq,))
+            # vec = jnp.reshape(vec, (2 ** nq,), out_sharding=out_sharding)
+            vec = jnp.reshape(vec, (2 ** nq,))
 
         return apply_rz
 
     def make_apply_rzz(qubit1, qubit2, coeff):
         def apply_rzz(vec, dt):
             # lattice.electric_evolution(dt) -> Rzz(2 * coeff * dt) = exp(-1.j * coeff * dt * ZZ)
-            shape = (2 ** (nq - qubit2 - 1), 2, 2 ** (qubit2 - qubit1 - 1), 2, 2 ** qubit1)
+            qpart = (nq - qubit2 - 1, 1, qubit2 - qubit1 - 1, 1, qubit1)
+            # shape, out_sharding, tmp_sharding = get_shape_and_shardings(vec, qpart)
+            shape = tuple(2 ** np.array(qpart))
+
             exponent = -1.j * coeff * dt
             op = jnp.exp(jnp.array([[exponent, -exponent], [-exponent, exponent]]))
             op = op.reshape((1, 2, 1, 2, 1))
+            # vec = jnp.reshape(vec, shape, out_sharding=tmp_sharding)
             vec = jnp.reshape(vec, shape)
             vec *= op
-            return jnp.reshape(vec, (2 ** nq,))
+            # vec = jnp.reshape(vec, (2 ** nq,), out_sharding=out_sharding)
+            vec = jnp.reshape(vec, (2 ** nq,))
 
         return apply_rzz
 
     def make_apply_rx(qubit, coeff):
         def apply_rx(vec, dt):
             # lattice.magnetic_evolution(dt) -> Rx(2 * coeff * dt) = exp(-1.j * coeff * dt * X)
-            shape = (2 ** (nq - qubit - 1), 2, 2 ** qubit)
-            op_d = jnp.cos(coeff * dt)
-            op_n = -1.j * jnp.sin(coeff * dt)
+            qpart = (nq - qubit - 1, 1, qubit)
+            # shape, out_sharding, tmp_sharding = get_shape_and_shardings(vec, qpart)
+            shape = tuple(2 ** np.array(qpart))
+
+            angle = coeff * dt
+            op_d = jnp.cos(angle)
+            op_n = -1.j * jnp.sin(angle)
+            # vec = jnp.reshape(vec, shape, out_sharding=tmp_sharding)
             vec = jnp.reshape(vec, shape)
             vec = vec * op_d + jnp.flip(vec, axis=1) * op_n
-            return jnp.reshape(vec, (2 ** nq,))
+            # vec = jnp.reshape(vec, (2 ** nq,), out_sharding=out_sharding)
+            vec = jnp.reshape(vec, (2 ** nq,))
 
         return apply_rx
 
@@ -135,15 +188,12 @@ def make_apply_u(hamiltonian, sh_qubit=None):
 
     @jax.jit
     def apply_u(vec, dt):
-        # sh_original = jax.typeof(vec).sharding
-        # vec = vec.reshape((2,) * nq, out_sharding=sh_qubit)
         for fn in z_fns + zz_fns:
             vec = fn(vec, 0.5 * dt)
         for fn in x_fns:
             vec = fn(vec, dt)
         for fn in z_fns + zz_fns:
             vec = fn(vec, 0.5 * dt)
-        # return vec.reshape(-1, out_sharding=sh_original)
         return vec
 
     return apply_u
