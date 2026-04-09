@@ -45,8 +45,12 @@ if __name__ == '__main__':
 
     apply_h = make_apply_h(hamiltonian, axis_type=AxisType.Auto)
 
+    rank = -1
     if options.gpus:
         if options.gpus == 'mpi':
+            from mpi4py import MPI
+            comm = MPI.COMM_WORLD
+            rank = comm.Get_rank()
             jax.distributed.initialize(cluster_detection_method="mpi4py")
         else:
             os.environ['CUDA_VISIBLE_DEVICES'] = options.gpus
@@ -62,11 +66,26 @@ if __name__ == '__main__':
         ground_locg = auto_axes(partial(ground_locg, sharding=sharding), out_sharding=sharding)
 
     eigval, eigvec, iter = ground_locg(apply_h, 0, vspace=(2 ** nplaq, np.float64))
-    print(iter)
+
     filename = f'ground_{options.nrow}x{options.ncol}_l{options.plaquette_energy:.2f}.h5'
-    with h5py.File(str(Path(options.out) / filename), 'w', libver='latest') as out:
-        out.create_dataset('eigval', data=eigval)
-        out.create_dataset('eigvec', data=eigvec)
+    if jax.process_index() == 0:
+        print(iter)
+        with h5py.File(str(Path(options.out) / filename), 'w', libver='latest') as out:
+            out.create_dataset('eigval', data=eigval)
+            out.create_dataset('eigvec', shape=eigvec.shape, dtype=eigvec.dtype)
+    
+    idx = 0
+    if rank > 0:
+        idx = comm.recv(source=rank - 1, tag=11)
+        
+    with h5py.File(str(Path(options.out) / filename), 'a', libver='latest') as out:
+        for shard in eigvec.addressable_shards:
+            size = shard.data.shape[0]
+            out['eigvec'][idx:idx + size] = shard.data
+            idx += size
+
+    if rank >= 0 and rank < comm.size - 1:
+        comm.send(idx, dest=rank + 1, tag=11)
 
     # LOG.info('compiling')
     # print(ground_locg(apply_h, 0, vspace=(2 ** nplaq, np.float64), sharding=sh_single)[0])
