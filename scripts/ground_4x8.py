@@ -3,10 +3,11 @@ import sys
 from pathlib import Path
 import logging
 import string
+from functools import partial
 import numpy as np
 import h5py
 import jax
-from jax.sharding import PartitionSpec, AxisType, NamedSharding
+from jax.sharding import PartitionSpec, AxisType, NamedSharding, auto_axes
 from heavyhex_qft.triangular_z2 import TriangularZ2Lattice
 from skqd_z2lgt.ground_locg import ground_locg
 sys.path.append(str(Path(__file__).parents[1] / 'lib'))
@@ -29,7 +30,7 @@ if __name__ == '__main__':
 
     lattice = TriangularZ2Lattice((options.nrow, options.ncol))
     base_link_state = np.zeros(lattice.num_links, dtype=np.uint8)
-    
+
     nsites = (options.ncol - 1) // 2 + 1 + (options.nrow // 2 + 1) % 2
     vfirst = (lattice.num_vertices - nsites) // 2
     charged_vertices = [vfirst, vfirst + nsites - 1]
@@ -42,7 +43,7 @@ if __name__ == '__main__':
     nplaq = lattice.num_plaquettes
     hamiltonian = dual_lattice.make_hamiltonian(options.plaquette_energy)
 
-    apply_h = make_apply_h(hamiltonian)
+    apply_h = make_apply_h(hamiltonian, axis_type=AxisType.Auto)
 
     if options.gpus:
         if options.gpus == 'mpi':
@@ -50,18 +51,17 @@ if __name__ == '__main__':
         else:
             os.environ['CUDA_VISIBLE_DEVICES'] = options.gpus
         ngpu = jax.device_count()
+        LOG.info('Parallelizing over %d devices', ngpu)
         nax = np.log2(ngpu).astype(int)
         if 2 ** nax != ngpu:
             raise ValueError('Invalid ngpu')
         mesh_shape = (2,) * nax
         axis_names = tuple(string.ascii_lowercase[:nax])
-        mesh_qubit = jax.make_mesh(mesh_shape, axis_names, axis_types=(AxisType.Explicit,) * nax)
+        mesh_qubit = jax.make_mesh(mesh_shape, axis_names, axis_types=(AxisType.Auto,) * nax)
         sharding = NamedSharding(mesh_qubit, PartitionSpec(axis_names))
-    else:
-        sharding = None
+        ground_locg = auto_axes(partial(ground_locg, sharding=sharding), out_sharding=sharding)
 
-    eigval, eigvec, iter = ground_locg(apply_h, 0, vspace=(2 ** nplaq, np.float64),
-                                       sharding=sharding)
+    eigval, eigvec, iter = ground_locg(apply_h, 0, vspace=(2 ** nplaq, np.float64))
     print(iter)
     filename = f'ground_{options.nrow}x{options.ncol}_l{options.plaquette_energy:.2f}.h5'
     with h5py.File(str(Path(options.out) / filename), 'w', libver='latest') as out:
