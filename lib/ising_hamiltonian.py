@@ -49,7 +49,7 @@ def get_shape_and_shardings(vec, qubit_partitioning):
     return shape, sharding, NamedSharding(sharding.mesh, PartitionSpec(*partitions))
 
 
-def make_apply_h(hamiltonian, axis_type=AxisType.Explicit):
+def make_apply_h(hamiltonian, axis_type=AxisType.Auto):
     """Apply-H highly optimized for the Ising Hamiltonian of the 2D Z2 LGT.
 
     Supply a NamedSharding compatible with a shape (2,) * nq array if sharding the input vector.
@@ -124,7 +124,7 @@ def make_apply_h(hamiltonian, axis_type=AxisType.Explicit):
     return apply_h
 
 
-def make_apply_u(hamiltonian, axis_type=AxisType.Explicit):
+def make_apply_u(hamiltonian, axis_type=AxisType.Auto):
     """Apply-U highly optimized for the Ising Hamiltonian of the 2D Z2 LGT.
 
     Supply a NamedSharding compatible with a shape (2,) * nq array if sharding the input vector.

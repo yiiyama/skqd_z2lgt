@@ -22,6 +22,8 @@ if __name__ == '__main__':
     parser.add_argument('plaquette_energy', type=float)
     parser.add_argument('--gpus')
     parser.add_argument('--out', default='.')
+    parser.add_argument('--xprof')
+    parser.add_argument('--localmpi', action='store_true')
     options = parser.parse_args()
 
     jax.config.update('jax_enable_x64', True)
@@ -43,49 +45,57 @@ if __name__ == '__main__':
     nplaq = lattice.num_plaquettes
     hamiltonian = dual_lattice.make_hamiltonian(options.plaquette_energy)
 
-    apply_h = make_apply_h(hamiltonian, axis_type=AxisType.Auto)
+    apply_h = make_apply_h(hamiltonian, axis_type=AxisType.Explicit)
 
-    rank = -1
     if options.gpus:
+        LOG.info('Parallelizing over %s', options.gpus)
         if options.gpus == 'mpi':
             from mpi4py import MPI
-            comm = MPI.COMM_WORLD
-            rank = comm.Get_rank()
             jax.distributed.initialize(cluster_detection_method="mpi4py")
+        elif options.localmpi:
+            from mpi4py import MPI
+            comm = MPI.COMM_WORLD
+            gpus = options.gpus.split(',')
+            os.environ['CUDA_VISIBLE_DEVICES'] = gpus[comm.Get_rank()]
+            jax.distributed.initialize('localhost:10000', comm.Get_size(), comm.Get_rank())
         else:
             os.environ['CUDA_VISIBLE_DEVICES'] = options.gpus
+
         ngpu = jax.device_count()
-        LOG.info('Parallelizing over %d devices', ngpu)
         nax = np.log2(ngpu).astype(int)
         if 2 ** nax != ngpu:
             raise ValueError('Invalid ngpu')
         mesh_shape = (2,) * nax
         axis_names = tuple(string.ascii_lowercase[:nax])
-        mesh_qubit = jax.make_mesh(mesh_shape, axis_names, axis_types=(AxisType.Auto,) * nax)
-        sharding = NamedSharding(mesh_qubit, PartitionSpec(axis_names))
-        ground_locg = auto_axes(partial(ground_locg, sharding=sharding), out_sharding=sharding)
+        mesh = jax.make_mesh(mesh_shape, axis_names, axis_types=(AxisType.Explicit,) * nax)
+        sharding = NamedSharding(mesh, PartitionSpec(axis_names))
+        LOG.info('Mesh shape %s, sharding %s', mesh_shape, sharding)
+        ground_locg = partial(ground_locg, sharding=sharding)
 
-    eigval, eigvec, iter = ground_locg(apply_h, 0, vspace=(2 ** nplaq, np.float64))
+    if (proc_id := jax.process_index()) == 0 and options.xprof:
+        with jax.profiler.trace(options.xprof):
+            eigval, eigvec, iter = ground_locg(apply_h, 0, vspace=(2 ** nplaq, np.float64))
+    else:
+        eigval, eigvec, iter = ground_locg(apply_h, 0, vspace=(2 ** nplaq, np.float64))
 
     filename = f'ground_{options.nrow}x{options.ncol}_l{options.plaquette_energy:.2f}.h5'
-    if jax.process_index() == 0:
-        print(iter)
+    if proc_id == 0:
+        LOG.info('LOCG iterations: %d', iter)
         with h5py.File(str(Path(options.out) / filename), 'w', libver='latest') as out:
             out.create_dataset('eigval', data=eigval)
             out.create_dataset('eigvec', shape=eigvec.shape, dtype=eigvec.dtype)
-    
-    idx = 0
-    if rank > 0:
-        idx = comm.recv(source=rank - 1, tag=11)
-        
+    else:
+        MPI.COMM_WORLD.recv(source=proc_id - 1, tag=11)
+
+    LOG.info('Writing from process %d on indices %s', proc_id,
+             list(shard.index for shard in eigvec.addressable_shards))
+
     with h5py.File(str(Path(options.out) / filename), 'a', libver='latest') as out:
         for shard in eigvec.addressable_shards:
-            size = shard.data.shape[0]
-            out['eigvec'][idx:idx + size] = shard.data
-            idx += size
+            out['eigvec'][shard.index] = shard.data
 
-    if rank >= 0 and rank < comm.size - 1:
-        comm.send(idx, dest=rank + 1, tag=11)
+    if proc_id < jax.process_count() - 1:
+        MPI.COMM_WORLD.send(1, dest=proc_id + 1, tag=11)
 
     # LOG.info('compiling')
     # print(ground_locg(apply_h, 0, vspace=(2 ** nplaq, np.float64), sharding=sh_single)[0])
