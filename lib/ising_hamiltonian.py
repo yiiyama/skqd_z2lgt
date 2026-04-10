@@ -145,7 +145,7 @@ def make_apply_u(hamiltonian, axis_type=AxisType.Auto):
             op = jnp.exp(jnp.array([exponent, -exponent])).reshape((1, 2, 1))
             vec = jnp.reshape(vec, shape, out_sharding=tmp_sharding)
             vec *= op
-            vec = jnp.reshape(vec, (2 ** nq,), out_sharding=out_sharding)
+            return jnp.reshape(vec, (2 ** nq,), out_sharding=out_sharding)
 
         return apply_rz
 
@@ -164,7 +164,7 @@ def make_apply_u(hamiltonian, axis_type=AxisType.Auto):
             op = op.reshape((1, 2, 1, 2, 1))
             vec = jnp.reshape(vec, shape, out_sharding=tmp_sharding)
             vec *= op
-            vec = jnp.reshape(vec, (2 ** nq,), out_sharding=out_sharding)
+            return jnp.reshape(vec, (2 ** nq,), out_sharding=out_sharding)
 
         return apply_rzz
 
@@ -183,7 +183,7 @@ def make_apply_u(hamiltonian, axis_type=AxisType.Auto):
             op_n = -1.j * jnp.sin(angle)
             vec = jnp.reshape(vec, shape, out_sharding=tmp_sharding)
             vec = vec * op_d + jnp.flip(vec, axis=1) * op_n
-            vec = jnp.reshape(vec, (2 ** nq,), out_sharding=out_sharding)
+            return jnp.reshape(vec, (2 ** nq,), out_sharding=out_sharding)
 
         return apply_rx
 
