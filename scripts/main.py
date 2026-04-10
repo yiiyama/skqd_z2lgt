@@ -1,7 +1,7 @@
 """Full workflow."""
 import os
 import logging
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, wait
 import jax
 from skqd_z2lgt.parameters import Parameters
 from skqd_z2lgt.tasks.open_output import open_output
@@ -39,24 +39,22 @@ if __name__ == '__main__':
     with ThreadPoolExecutor() as executor:
         if parameters.dmrg:
             dmrg_future = executor.submit(dmrg, parameters)
-        raw_data = sample_quantum(parameters)
-        reco_data = preprocess(parameters, raw_data)
-        models_future = executor.submit(train_generator, parameters, reco_data[1])
-        models_future.add_done_callback(lambda fut: compile_models(parameters, fut.result()))
-        energy_init, states_init = diagonalize_init(parameters, reco_data[0])
+        sample_quantum(parameters)
+        preprocess(parameters)
+        models_future = executor.submit(train_generator, parameters)
+        energy_init, states_init = diagonalize_init(parameters)
         if jax.device_count() > 1:
-            rnd_future = executor.submit(diagonalize, parameters, reco_data[0], energy_init,
-                                         states_init, ref_data=reco_data[1], jax_device_id=1)
-            rcv_future = executor.submit(diagonalize, parameters, reco_data[0], energy_init,
-                                         states_init, crbm_models=models_future.result(),
+            rnd_future = executor.submit(diagonalize, parameters, energy_init, states_init, 'rnd',
+                                         jax_device_id=1)
+            wait([models_future])
+            rcv_future = executor.submit(diagonalize, parameters, energy_init, states_init, 'rcv',
                                          jax_device_id=0)
             energy_rnd = rnd_future.result()
             energy = rcv_future.result()
         else:
-            energy_rnd = diagonalize(parameters, reco_data[0], energy_init, states_init,
-                                     ref_data=reco_data[1])
-            energy = diagonalize(parameters, reco_data[0], energy_init, states_init,
-                                 crbm_models=models_future.result())
+            energy_rnd = diagonalize(parameters, energy_init, states_init, 'rnd')
+            wait([models_future])
+            energy = diagonalize(parameters, energy_init, states_init, 'rcv')
 
     if parameters.dmrg:
         logger.info('DMRG energy: %f', dmrg_future.result())

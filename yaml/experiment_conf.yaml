@@ -1,0 +1,14 @@
+---
+lattice_config: |2
+    * * *
+   * * * *
+  * * * * *
+   * * * *
+    * * *
+plaquette_energy: 0.5
+delta_t: 0.1
+steps: [1]
+num_shots: 16
+basis_2q: cz
+instance: ICEPP-dedicated-temp-prem-us
+backend_name: ibm_pittsburgh

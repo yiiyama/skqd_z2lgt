@@ -1,0 +1,8 @@
+---
+lattice_config: |2
+  * * * * *
+   * * * * *
+  * * * * *
+coupling: 1.0
+invert: false
+filename: /tmp/test_dmrg.h5
