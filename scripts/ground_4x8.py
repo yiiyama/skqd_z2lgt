@@ -69,7 +69,6 @@ if __name__ == '__main__':
         axis_names = tuple(string.ascii_lowercase[:nax])
         mesh = jax.make_mesh(mesh_shape, axis_names, axis_types=(AxisType.Explicit,) * nax)
         sharding = NamedSharding(mesh, PartitionSpec(axis_names))
-        LOG.info('Mesh shape %s, sharding %s', mesh_shape, sharding)
         ground_locg = partial(ground_locg, sharding=sharding)
 
     if (proc_id := jax.process_index()) == 0 and options.xprof:
