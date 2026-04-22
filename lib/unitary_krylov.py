@@ -1,12 +1,10 @@
 """Unitary Krylov diagonalization studies."""
-from functools import partial
 import numpy as np
 from scipy.linalg import eigvalsh
 import jax
 import jax.numpy as jnp
 from jax.experimental.ode import odeint
 from heavyhex_qft.triangular_z2 import TriangularZ2Lattice
-from skqd_z2lgt.sqd import get_hamiltonian_arrays
 from skqd_z2lgt.ground_locg import ground_locg
 
 
@@ -47,7 +45,7 @@ def make_hvec(hamiltonian, variable=False, dtype=np.complex128):
     if variable:
         hvec = jax.jit(hvec)
     else:
-        hvec = partial(jax.jit, static_argnums=[1])(hvec)
+        hvec = jax.jit(static_argnums=[1])(hvec)
 
     return hvec
 
@@ -99,14 +97,14 @@ def make_trotter_uvec(hamiltonian, delta_t):
     return trotter_uvec
 
 
-@partial(jax.jit, static_argnums=[0, 1])
+@jax.jit(static_argnums=[0, 1])
 def integrate(hvec, nplaq, tpoints, psi0=None):
     if psi0 is None:
         psi0 = jax.nn.one_hot(0, 2 ** nplaq, dtype=np.complex128)
     return odeint(lambda state, _: -1.j * hvec(state), psi0, tpoints, rtol=1.e-10, atol=1.e-10)
 
 
-@partial(jax.jit, static_argnums=[0, 1, 2, 3, 4])
+@jax.jit(static_argnums=[0, 1, 2, 3, 4])
 def simulate(
     trotter_uvec,
     nplaq,
@@ -138,7 +136,7 @@ def simulate(
 
 
 
-@partial(jax.jit, static_argnums=[0, 1, 2, 3])
+@jax.jit(static_argnums=[0, 1, 2, 3])
 def sample(trotter_uvec, nplaq, num_steps, shots, psi0=None):
     state = psi0
     if state is None:

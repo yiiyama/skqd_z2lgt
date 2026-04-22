@@ -1,7 +1,6 @@
 import sys
 from pathlib import Path
 import logging
-from functools import partial
 import numpy as np
 import h5py
 import jax
@@ -36,7 +35,7 @@ PSI_TEMPLATE = '/work/gp14/p14000/data/krylov/{}_{}_l{:.2f}_states.h5'
 LOG = logging.getLogger(__name__)
 
 
-@partial(jax.jit, static_argnums=[0, 1])
+@jax.jit(static_argnums=[0, 1])
 def compute_ground_state(hvec, nplaq, alpha):
     xmat = jax.nn.one_hot(0, 2 ** nplaq, dtype=np.complex128)[:, None]
     # pylint: disable-next=unbalanced-tuple-unpacking
@@ -49,7 +48,7 @@ def compute_ground_state(hvec, nplaq, alpha):
     return sort_idx, sorted_probs, largel
 
 
-@partial(jax.jit, static_argnums=[0, 1], static_argnames=['return_final_state'])
+@jax.jit(static_argnums=[0, 1], static_argnames=['return_final_state'])
 def compute_krylov_vectors(hvec, nplaq, tpoints, idx, psi0=None, return_final_state=False):
     psis = integrate(hvec, nplaq, tpoints, psi0=psi0)
     probs = jnp.square(jnp.abs(psis[1:, idx]))

@@ -237,7 +237,7 @@ def apply_z(vector):
     return vector.at[1].multiply(-1.)
 
 
-@partial(jax.jit, static_argnames=['qubit'])
+@jax.jit(static_argnames=['qubit'])
 def apply_pauli_qubit(vector, pauli_index, *, qubit):
     vector = jnp.moveaxis(vector, qubit, 0)
     vector = jax.lax.switch(pauli_index, [apply_i, apply_x, apply_y, apply_z], vector)
