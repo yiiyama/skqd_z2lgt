@@ -1,0 +1,36 @@
+---
+lgt:
+  # lattice: |2    # boston 28plaq
+  #       * * *╎
+  #        * * *
+  #   * * * * *╎
+  #    * * * * *
+  #   * * * * *╎
+  #    * *   *
+  #   *-*
+  # lattice: |2   # aachen 31plaq
+  #    * *
+  #   * * * * *╷
+  #    * * * * *
+  #   * * * * *╵
+  #    * * * *
+  #   * * *
+  #      *
+  lattice: |2    # kawasaki 32plaq
+     * * * * *
+    * * * * *╎
+     * * * * *
+    * * * * *╎
+     * * * * *
+  plaquette_energy: 1.5
+  charged_vertices: []
+dmrg:
+  julia_sysimage: /opt/julia/iiyama/sysimages/sys_itensors.so
+runtime:
+  instance: 'ICEPP-dedicated'
+  backend: 'ibm_kawasaki'
+  shots_exp: 100000
+  shots_ref: 400000
+skqd:
+  extensions: []
+pkgpath: '/data/iiyama/2dz2/experiment_400k_kawasaki'
