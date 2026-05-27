@@ -3,7 +3,6 @@ import sys
 from pathlib import Path
 import logging
 import string
-from functools import partial
 import numpy as np
 import h5py
 import jax
@@ -11,7 +10,6 @@ import jax.numpy as jnp
 from jax.sharding import PartitionSpec, AxisType, NamedSharding
 from heavyhex_qft.triangular_z2 import TriangularZ2Lattice
 from skqd_z2lgt.mwpm import minimum_weight_link_state
-from skqd_z2lgt.parameters import Parameters
 from skqd_z2lgt.tasks.open_output import open_output
 sys.path.append(str(Path(__file__).parents[1] / 'lib'))
 from ising_hamiltonian import make_apply_u
@@ -66,8 +64,10 @@ if __name__ == '__main__':
 
     @jax.jit
     def run():
-        vec = jax.device_put(jax.nn.one_hot(0, 2 ** lattice.num_plaquettes, dtype=np.complex128),
-                             sharding)
+        vec = (
+            jax.lax.broadcasted_iota(np.int64, (2 ** lattice.num_plaquettes,), 0,
+                                     out_sharding=sharding) == 0
+        ).astype(np.complex128)
         for _ in range(options.nsteps):
             vec = apply_u(vec, dt)
         probs = jnp.square(jnp.abs(vec))

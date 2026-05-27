@@ -3,11 +3,10 @@ import sys
 from pathlib import Path
 import logging
 import string
-from functools import partial
 import numpy as np
 import h5py
 import jax
-from jax.sharding import PartitionSpec, AxisType, NamedSharding, auto_axes
+from jax.sharding import AxisType
 from heavyhex_qft.triangular_z2 import TriangularZ2Lattice
 from skqd_z2lgt.ground_locg import ground_locg
 sys.path.append(str(Path(__file__).parents[1] / 'lib'))
@@ -67,9 +66,7 @@ if __name__ == '__main__':
             raise ValueError('Invalid ngpu')
         mesh_shape = (2,) * nax
         axis_names = tuple(string.ascii_lowercase[:nax])
-        mesh = jax.make_mesh(mesh_shape, axis_names, axis_types=(AxisType.Explicit,) * nax)
-        sharding = NamedSharding(mesh, PartitionSpec(axis_names))
-        ground_locg = partial(ground_locg, sharding=sharding)
+        jax.set_mesh(jax.make_mesh(mesh_shape, axis_names, axis_types=(AxisType.Explicit,) * nax))
 
     if (proc_id := jax.process_index()) == 0 and options.xprof:
         with jax.profiler.trace(options.xprof):
