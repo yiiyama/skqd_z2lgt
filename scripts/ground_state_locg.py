@@ -8,7 +8,7 @@ import h5py
 import jax
 from jax.sharding import AxisType
 from heavyhex_qft.triangular_z2 import TriangularZ2Lattice
-from skqd_z2lgt.ground_locg import ground_locg
+from rqutils.ground_locg import ground_locg
 sys.path.append(str(Path(__file__).parents[1] / 'lib'))
 from ising_hamiltonian import make_apply_h
 
