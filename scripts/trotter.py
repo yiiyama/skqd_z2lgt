@@ -61,7 +61,7 @@ if __name__ == '__main__':
     @jax.jit
     def run():
         vec = (
-            jax.lax.broadcasted_iota(np.int64, (2 ** lattice.num_plaquettes,), 0,
+            jax.lax.broadcasted_iota(np.int64, (2 ** hamiltonian.num_qubits,), 0,
                                      out_sharding=sharding) == 0
         ).astype(np.complex128)
         for _ in range(options.nsteps):
