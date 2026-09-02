@@ -1,15 +1,15 @@
 """Full workflow."""
 import os
 import logging
-from concurrent.futures import ThreadPoolExecutor, wait
+from concurrent.futures import ThreadPoolExecutor
 import jax
-from skqd_z2lgt.parameters import Parameters
-from skqd_z2lgt.tasks.open_output import open_output
-from skqd_z2lgt.tasks.dmrg import dmrg
-from skqd_z2lgt.tasks.sample_quantum import sample_quantum
-from skqd_z2lgt.tasks.preprocess import preprocess
-from skqd_z2lgt.tasks.train_generator import train_generator
-from skqd_z2lgt.tasks.diagonalize import diagonalize_init, diagonalize, compile_models
+from skqd_z2lgt.orchestration.parameters import Parameters
+from skqd_z2lgt.orchestration.open_output import open_output
+from skqd_z2lgt.orchestration.dmrg import dmrg
+from skqd_z2lgt.orchestration.sample_quantum import sample_quantum
+from skqd_z2lgt.orchestration.preprocess import preprocess
+from skqd_z2lgt.orchestration.train_generator import train_generator
+from skqd_z2lgt.orchestration.diagonalize import diagonalize_in_mode
 
 if __name__ == '__main__':
     from argparse import ArgumentParser
@@ -34,30 +34,19 @@ if __name__ == '__main__':
     with open(options.parameters, 'r', encoding='utf-8') as source:
         parameters = Parameters(**yaml.load(source, yaml.Loader))
 
-    open_output(parameters)
+    open_output(parameters, logger)
 
-    with ThreadPoolExecutor() as executor:
-        if parameters.dmrg:
-            dmrg_future = executor.submit(dmrg, parameters)
-        sample_quantum(parameters)
-        preprocess(parameters)
-        models_future = executor.submit(train_generator, parameters)
-        energy_init, states_init = diagonalize_init(parameters)
-        if jax.device_count() > 1:
-            rnd_future = executor.submit(diagonalize, parameters, energy_init, states_init, 'rnd',
-                                         jax_device_id=1)
-            wait([models_future])
-            rcv_future = executor.submit(diagonalize, parameters, energy_init, states_init, 'rcv',
-                                         jax_device_id=0)
-            energy_rnd = rnd_future.result()
-            energy = rcv_future.result()
-        else:
-            energy_rnd = diagonalize(parameters, energy_init, states_init, 'rnd')
-            wait([models_future])
-            energy = diagonalize(parameters, energy_init, states_init, 'rcv')
+    if parameters.dmrg:
+        with ThreadPoolExecutor() as executor:
+            dmrg_future = executor.submit(dmrg, parameters, logger=logger)
+
+    sample_quantum(parameters, logger=logger)
+    preprocess(parameters, logger=logger)
+    train_generator(parameters, logger=logger)
+    energy_rn = diagonalize_in_mode(parameters, 'rn', logger=logger)
+    energy_cr = diagonalize_in_mode(parameters, 'cr', logger=logger)
 
     if parameters.dmrg:
         logger.info('DMRG energy: %f', dmrg_future.result())
-    logger.info('SKQD energy (no conf. recovery): %f', energy_init)
-    logger.info('SKQD energy (random bit flips): %f', energy_rnd)
-    logger.info('SKQD energy: %f', energy)
+    logger.info('SKQD energy (random bit flips): %f', energy_rn)
+    logger.info('SKQD energy: %f', energy_cr)

@@ -32,7 +32,8 @@ if __name__ == '__main__':
 
     parameters = open_output(options.pkgpath)
     lattice = TriangularZ2Lattice(parameters.lgt.lattice)
-    base_link_state = minimum_weight_link_state(parameters.lgt.charged_vertices, lattice)
+    base_link_state = minimum_weight_link_state(parameters.lgt.charged_vertices,
+                                                parameters.lgt.charged_plaquettes, lattice)
     dual_lattice = lattice.plaquette_dual(base_link_state)
     hamiltonian = dual_lattice.make_hamiltonian(parameters.lgt.plaquette_energy)
     apply_u = make_apply_u(hamiltonian, axis_type=AxisType.Explicit)
