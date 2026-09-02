@@ -8,9 +8,8 @@ import h5py
 import jax
 import jax.numpy as jnp
 from jax.sharding import PartitionSpec, AxisType, NamedSharding
-from heavyhex_qft.triangular_z2 import TriangularZ2Lattice
-from skqd_z2lgt.mwpm import minimum_weight_link_state
-from skqd_z2lgt.tasks.open_output import open_output
+from skqd_z2lgt.orchestration.common import make_dual_hamiltonian
+from skqd_z2lgt.orchestration.open_output import open_output
 sys.path.append(str(Path(__file__).parents[1] / 'lib'))
 from ising_hamiltonian import make_apply_u
 
@@ -31,11 +30,7 @@ if __name__ == '__main__':
     LOG = logging.getLogger()
 
     parameters = open_output(options.pkgpath)
-    lattice = TriangularZ2Lattice(parameters.lgt.lattice)
-    base_link_state = minimum_weight_link_state(parameters.lgt.charged_vertices,
-                                                parameters.lgt.charged_plaquettes, lattice)
-    dual_lattice = lattice.plaquette_dual(base_link_state)
-    hamiltonian = dual_lattice.make_hamiltonian(parameters.lgt.plaquette_energy)
+    hamiltonian = make_dual_hamiltonian(parameters)
     apply_u = make_apply_u(hamiltonian, axis_type=AxisType.Explicit)
     dt = parameters.circuit.dts[options.idt]
 

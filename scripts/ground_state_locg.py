@@ -7,8 +7,9 @@ import numpy as np
 import h5py
 import jax
 from jax.sharding import AxisType
-from heavyhex_qft.triangular_z2 import TriangularZ2Lattice
 from rqutils.ground_locg import ground_locg
+from skqd_z2lgt.orchestration.common import make_dual_hamiltonian
+from skqd_z2lgt.orchestration.open_output import open_output
 sys.path.append(str(Path(__file__).parents[1] / 'lib'))
 from ising_hamiltonian import make_apply_h
 
@@ -16,11 +17,8 @@ from ising_hamiltonian import make_apply_h
 if __name__ == '__main__':
     from argparse import ArgumentParser
     parser = ArgumentParser()
-    parser.add_argument('nrow', type=int)
-    parser.add_argument('ncol', type=int)
-    parser.add_argument('plaquette_energy', type=float)
+    parser.add_argument('pkgpath')
     parser.add_argument('--gpus')
-    parser.add_argument('--out', default='.')
     parser.add_argument('--xprof')
     parser.add_argument('--localmpi', action='store_true')
     options = parser.parse_args()
@@ -29,21 +27,8 @@ if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
     LOG = logging.getLogger()
 
-    lattice = TriangularZ2Lattice((options.nrow, options.ncol))
-    base_link_state = np.zeros(lattice.num_links, dtype=np.uint8)
-
-    nsites = (options.ncol - 1) // 2 + 1 + (options.nrow // 2 + 1) % 2
-    vfirst = (lattice.num_vertices - nsites) // 2
-    charged_vertices = [vfirst, vfirst + nsites - 1]
-    links = []
-    for ivtx in range(*charged_vertices):
-        links.append(lattice.graph.edge_indices_from_endpoints(ivtx, ivtx + 1)[0])
-    base_link_state = np.zeros(lattice.num_links, dtype=np.uint8)
-    base_link_state[::-1][links] = 1
-    dual_lattice = lattice.plaquette_dual(base_link_state)
-    nplaq = lattice.num_plaquettes
-    hamiltonian = dual_lattice.make_hamiltonian(options.plaquette_energy)
-
+    parameters = open_output(options.pkgpath)
+    hamiltonian = make_dual_hamiltonian(parameters)
     apply_h = make_apply_h(hamiltonian, axis_type=AxisType.Explicit)
 
     if options.gpus:
@@ -68,13 +53,14 @@ if __name__ == '__main__':
         axis_names = tuple(string.ascii_lowercase[:nax])
         jax.set_mesh(jax.make_mesh(mesh_shape, axis_names, axis_types=(AxisType.Explicit,) * nax))
 
+    vspace = (2 ** hamiltonian.num_qubits, np.float64)
     if (proc_id := jax.process_index()) == 0 and options.xprof:
         with jax.profiler.trace(options.xprof):
-            eigval, eigvec, iter = ground_locg(apply_h, 0, vspace=(2 ** nplaq, np.float64))
+            eigval, eigvec, iter = ground_locg(apply_h, 0, vspace=vspace)
     else:
-        eigval, eigvec, iter = ground_locg(apply_h, 0, vspace=(2 ** nplaq, np.float64))
+        eigval, eigvec, iter = ground_locg(apply_h, 0, vspace=vspace)
 
-    filename = f'ground_{options.nrow}x{options.ncol}_l{options.plaquette_energy:.2f}.h5'
+    filename = f'ground_locg.h5'
     if proc_id == 0:
         LOG.info('LOCG iterations: %d', iter)
         with h5py.File(str(Path(options.out) / filename), 'w', libver='latest') as out:
