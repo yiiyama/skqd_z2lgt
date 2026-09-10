@@ -97,15 +97,19 @@ def count_windings(
     def add_winds(val):
         windings, seeds, _states = val
         clusters = make_clusters(amat, seeds, states=_states)
-        windings += (clusters != 0).astype(int)
-        clusters *= ((clusters & peripheries) != peripheries).astype(int)
+        cluster_exists = (clusters != 0).astype(int)
+        windings += cluster_exists
         neighbors = jnp.sum(
             (clusters[:, None] & amat[None, :] != 0).astype(clusters.dtype) << jnp.arange(nbit),
             axis=1
         )
         neighbors &= ~clusters
+        neighbors |= (1 - cluster_exists) * seeds
         surroundings = make_clusters(amat, neighbors, states=~_states)
-        seeds = (clusters | surroundings) * (jnp.bitwise_count(surroundings & peripheries) == 0)
+        bounded_ring = ((surroundings != 0) & ((surroundings & peripheries) == 0)).astype(int)
+        bounded_ring &= ((clusters & peripheries) != peripheries).astype(int)
+        windings += bounded_ring
+        seeds = (clusters | surroundings) * bounded_ring
         _states |= seeds
         return windings, seeds, _states
 

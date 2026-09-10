@@ -13,15 +13,29 @@ from rqutils.ground_locg import ground_locg
 from heavyhex_qft.triangular_z2 import TriangularZ2Lattice
 sys.path.append(str(Path(__file__).parents[1] / 'lib'))
 from ising_hamiltonian import make_apply_h
-from face_area import compute_counts
+from topological import compute_areas, count_windings, _convert_le_array_to_be_int
+
+
+@jax.jit
+def get_areas_and_windings(amat, peripheries, monopole):
+    amat = _convert_le_array_to_be_int(amat)
+    indices = jnp.arange(2 ** (amat.shape[0] - 1))
+    mask = 2 ** monopole - 1
+    states = ((indices & ~mask) << 1) | (1 << monopole) | (indices & mask)
+    areas = compute_areas(amat, 1 << monopole, states=states)
+    windings = count_windings(amat, peripheries, monopole, states=states)
+    return areas, windings
 
 
 @jax.jit(static_argnames=['apply_h', 'return_eigvec'])
-def compute_area(counts, apply_h, return_eigvec=False):
-    eigvec = ground_locg(apply_h, 0, vspace=(counts.shape[0], np.float64))[1]
+def compute_expvals(areas, windings, apply_h, return_eigvec=False):
+    eigvec = ground_locg(apply_h, 0, vspace=(areas.shape[0], np.float64))[1]
+    probs = jnp.square(eigvec)
+    area = areas @ probs
+    winding = windings @ probs
     if return_eigvec:
-        return counts @ jnp.square(eigvec), eigvec
-    return counts @ jnp.square(eigvec)
+        return area, winding, eigvec
+    return area, winding
 
 
 if __name__ == '__main__':
@@ -29,8 +43,8 @@ if __name__ == '__main__':
     parser = ArgumentParser()
     parser.add_argument('lattice')
     parser.add_argument('monopole', type=int)
-    parser.add_argument('--out', default='.')
     parser.add_argument('--mu')
+    parser.add_argument('--out', default='.')
     parser.add_argument('--save-counts', action='store_true')
     parser.add_argument('--gpus')
     parser.add_argument('--localmpi', action='store_true')
@@ -80,14 +94,17 @@ if __name__ == '__main__':
     ndim = 2 ** nactiv
 
     pgraph = lattice.dual_graph.copy()
-    for idx in pgraph.node_indices():
-        if not isinstance(pgraph[idx], int):
-            pgraph.remove_node(idx)
+    peripheries_nid = set()
+    for nid in pgraph.node_indices():
+        if not isinstance(pgraph[nid], int):
+            peripheries_nid |= set(pgraph.neighbors(nid))
+            pgraph.remove_node(nid)
     amat = adjacency_matrix(pgraph).astype(np.uint8)
-    seeds = np.delete(amat[options.monopole], options.monopole)
-    bmat = np.delete(np.delete(amat, options.monopole, axis=0), options.monopole, axis=1)
+    nid_to_idx = {nid: idx for idx, nid in enumerate(pgraph.node_indices())}
+    peripheries = np.zeros(amat.shape[0], dtype=np.uint8)
+    peripheries[[nid_to_idx[nid] for nid in peripheries_nid]] = 1
 
-    counts = compute_counts(bmat, seeds)
+    areas, windings = get_areas_and_windings(amat, peripheries, options.monopole)
 
     if options.mu is None:
         mus = np.linspace(0.1, 2.6, 26)
@@ -97,17 +114,21 @@ if __name__ == '__main__':
         mus = np.linspace(mumin, mumax, nmu)
 
     # eigvecs = np.empty(mus.shape + (ndim,))
-    areas = np.empty_like(mus)
+    area_expvals = np.empty_like(mus)
+    winding_expvals = np.empty_like(mus)
 
     for imu, mu in enumerate(mus):
         print('mu', mu)
         apply_h = make_apply_h(dual.make_hamiltonian(mu))
-        areas[imu] = compute_area(counts, apply_h)
+        area, winding = compute_expvals(areas, windings, apply_h)
+        area_expvals[imu] = area
+        winding_expvals[imu] = winding
         
     output_name = str(Path(options.out) / f'{name}_{options.monopole}.h5')
     with h5py.File(output_name, 'w') as out:
         out.create_dataset('mus', data=mus)
         # out.create_dataset('eigvecs', data=eigvecs)
-        out.create_dataset('areas', data=areas)
+        out.create_dataset('areas', data=area_expvals)
+        out.create_dataset('windings', data=winding_expvals)
         if options.save_counts:
-            out.create_dataset('counts', data=counts)
+            out.create_dataset('counts', data=areas)
