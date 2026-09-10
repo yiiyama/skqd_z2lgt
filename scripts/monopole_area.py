@@ -101,7 +101,7 @@ if __name__ == '__main__':
     for imu, mu in enumerate(mus):
         print('mu', mu)
         apply_h = make_apply_h(dual.make_hamiltonian(mu))
-        area = compute_area(counts, apply_h)
+        areas[imu] = compute_area(counts, apply_h)
         
     output_name = str(Path(options.out) / f'{name}_{options.monopole}.h5')
     with h5py.File(output_name, 'w') as out:
