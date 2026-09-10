@@ -62,7 +62,7 @@ if __name__ == '__main__':
         jax.set_mesh(jax.make_mesh(mesh_shape, axis_names, axis_types=(AxisType.Explicit,) * nax))
 
     if options.lattice.endswith('.json'):
-        name = options.lattice[:-5]
+        name = Path(options.lattice).name[:-5]
         with open(options.lattice, 'r') as source:
             lattice = TriangularZ2Lattice.from_json(source.read())
     else:
