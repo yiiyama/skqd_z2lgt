@@ -31,6 +31,7 @@ if __name__ == '__main__':
     parser.add_argument('monopole', type=int)
     parser.add_argument('--out', default='.')
     parser.add_argument('--mu')
+    parser.add_argument('--save-counts', action='store_true')
     parser.add_argument('--gpus')
     parser.add_argument('--localmpi', action='store_true')
     options = parser.parse_args()
@@ -107,5 +108,6 @@ if __name__ == '__main__':
     with h5py.File(output_name, 'w') as out:
         out.create_dataset('mus', data=mus)
         # out.create_dataset('eigvecs', data=eigvecs)
-        out.create_dataset('counts', data=counts)
         out.create_dataset('areas', data=areas)
+        if options.save_counts:
+            out.create_dataset('counts', data=counts)
