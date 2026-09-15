@@ -29,13 +29,13 @@ def get_areas_and_windings(amat, peripheries, monopole):
 
 @jax.jit(static_argnames=['apply_h', 'return_eigvec'])
 def compute_expvals(areas, windings, apply_h, return_eigvec=False):
-    eigvec = ground_locg(apply_h, 0, vspace=(areas.shape[0], np.float64))[1]
+    eigval, eigvec = ground_locg(apply_h, 0, vspace=(areas.shape[0], np.float64))[:2]
     probs = jnp.square(eigvec)
     area = areas @ probs
     winding = windings @ probs
     if return_eigvec:
-        return area, winding, eigvec
-    return area, winding
+        return eigval, area, winding, eigvec
+    return eigval, area, winding
 
 
 if __name__ == '__main__':
@@ -113,6 +113,7 @@ if __name__ == '__main__':
         nmu = int(options.mu.split(',')[2])
         mus = np.linspace(mumin, mumax, nmu)
 
+    energies = np.empty_like(mus)
     # eigvecs = np.empty(mus.shape + (ndim,))
     area_expvals = np.empty_like(mus)
     winding_expvals = np.empty_like(mus)
@@ -120,13 +121,15 @@ if __name__ == '__main__':
     for imu, mu in enumerate(mus):
         print('mu', mu)
         apply_h = make_apply_h(dual.make_hamiltonian(mu))
-        area, winding = compute_expvals(areas, windings, apply_h)
+        energy, area, winding = compute_expvals(areas, windings, apply_h)
+        energies[imu] = energy
         area_expvals[imu] = area
         winding_expvals[imu] = winding
         
     output_name = str(Path(options.out) / f'{name}_{options.monopole}.h5')
     with h5py.File(output_name, 'w') as out:
         out.create_dataset('mus', data=mus)
+        out.create_dataset('energies', data=energies)
         # out.create_dataset('eigvecs', data=eigvecs)
         out.create_dataset('areas', data=area_expvals)
         out.create_dataset('windings', data=winding_expvals)
