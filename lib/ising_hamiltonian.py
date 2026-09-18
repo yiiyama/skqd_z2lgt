@@ -112,11 +112,14 @@ def make_apply_h(hamiltonian, axis_type=AxisType.Auto):
     x_fns = [make_apply_x(q) for q in range(nq)]
 
     @jax.jit
-    def apply_h(vec):
+    def apply_h(vec, xc=None):
         result = jnp.zeros_like(vec)
         for fn in x_fns:
             result += fn(vec)
-        result *= x_coeff
+        if xc is None:
+            result *= x_coeff
+        else:
+            result *= xc
         for fn in z_fns + zz_fns:
             result += fn(vec)
         return result
