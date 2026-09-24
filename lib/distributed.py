@@ -10,26 +10,29 @@ from jax.experimental.mesh_utils import create_hybrid_device_mesh
 LOG = logging.getLogger(__name__)
 
 
+def parse_gpus(gpus):
+    if isinstance(gpus, list):
+        return ','.join(f'{d}' for d in gpus)
+    return gpus
+
+
 def qubit_sharding(mpi=False, gpus=None):
     """Return a NamedSharding over a mesh with shape (2,)*(log2 NGPU)."""
     if mpi:
-        # Below: attempt at using one process per GPU. Somehow failed with "Invalid ordinal" at CUDA
-        # boot.
-
-        # comm = MPI.COMM_WORLD
-        # # Split the communicator by shared memory / node
-        # local_comm = comm.Split_type(MPI.COMM_TYPE_SHARED)
-        # # Get the local rank of the process within its node
-        # local_rank = local_comm.Get_rank()
-        # # Free the local communicator resources
-        # local_comm.Free()
-        # if options.gpus:
-        #     visible_device = options.gpus.split(',')[local_rank]
-        # else:
-        #     # We assume one process per GPU is created
-        #     visible_device = str(local_rank)
-        # LOG.info('Using GPU "%s"', visible_device)
-        # os.environ['CUDA_VISIBLE_DEVICES'] = visible_device
+        comm = MPI.COMM_WORLD
+        # Split the communicator by shared memory / node
+        local_comm = comm.Split_type(MPI.COMM_TYPE_SHARED)
+        # Get the local rank of the process within its node
+        local_rank = local_comm.Get_rank()
+        # Free the local communicator resources
+        local_comm.Free()
+        if gpus:
+            visible_device = parse_gpus(gpus).split(',')[local_rank]
+        else:
+            # We assume one process per GPU is created
+            visible_device = str(local_rank)
+        LOG.info('Using GPU "%s"', visible_device)
+        os.environ['CUDA_VISIBLE_DEVICES'] = visible_device
         if mpi == 'local':
             comm = MPI.COMM_WORLD
             jax.distributed.initialize('localhost:10000', comm.Get_size(), comm.Get_rank())
@@ -38,12 +41,10 @@ def qubit_sharding(mpi=False, gpus=None):
         
         # LOG.info('Process %d uses GPU %s', jax.process_index(), visible_device)
         LOG.info('All device slices: %s', [d.slice_index for d in jax.devices()])
-
+    
     elif gpus:
         LOG.info('Parallelizing over %s', gpus)
-        if isinstance(gpus, list):
-            gpus = ','.join(f'{d}' for d in gpus)
-        os.environ['CUDA_VISIBLE_DEVICES'] = gpus
+        os.environ['CUDA_VISIBLE_DEVICES'] = parse_gpus(gpus)
     
     if (ndev := jax.device_count()) == 1:
         return None
