@@ -55,7 +55,11 @@ def make_apply_h(hamiltonian, axis_type=AxisType.Auto):
     Supply a NamedSharding compatible with a shape (2,) * nq array if sharding the input vector.
     """
     nq = hamiltonian.num_qubits
+    z_coeffs, zz_coeffs, x_coeff = get_coeffs(hamiltonian)
+    return make_apply_h_from_coeffs(nq, z_coeffs, zz_coeffs, x_coeff, axis_type=axis_type)
 
+
+def make_apply_h_from_coeffs(nq, z_coeffs, zz_coeffs, x_coeff=None, axis_type=AxisType.Auto):
     def make_apply_z(qubit, coeff):
         def apply_z(vec):
             qpart = (nq - qubit - 1, 1, qubit)
@@ -106,7 +110,6 @@ def make_apply_h(hamiltonian, axis_type=AxisType.Auto):
 
         return apply_x
 
-    z_coeffs, zz_coeffs, x_coeff = get_coeffs(hamiltonian)
     z_fns = [make_apply_z(q, c) for q, c in z_coeffs.items()]
     zz_fns = [make_apply_zz(q1, q2, c) for (q1, q2), c in zz_coeffs.items()]
     x_fns = [make_apply_x(q) for q in range(nq)]
