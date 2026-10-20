@@ -49,7 +49,7 @@ if __name__ == '__main__':
     parser.add_argument('ny', type=int)
     parser.add_argument('--charges', nargs=2)
     parser.add_argument('--order', type=int, default=8)
-    parser.add_argument('--out', default='.')
+    parser.add_argument('--out', default='square_lattice_ising_pt.h5')
     parser.add_argument('--gpus')
     options = parser.parse_args()
 

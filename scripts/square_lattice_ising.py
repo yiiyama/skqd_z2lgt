@@ -12,41 +12,9 @@ import jax.numpy as jnp
 from rqutils.ground_locg import ground_locg
 sys.path.append(str(Path(__file__).parents[1] / 'lib'))
 from ising_hamiltonian import make_apply_h_from_coeffs
-from square_ising import make_primal_graph
+from square_ising import make_primal_graph, get_hamiltonian_coeffs
 from distributed import qubit_sharding, save_multiprocess_array
 from kde import gaussian_kde
-
-
-def make_apply_h(primal_graph):
-    nvx = max(datum[0] for datum in primal_graph.nodes()) + 1
-    nvy = max(datum[1] for datum in primal_graph.nodes()) + 1
-    nx = nvx - 1
-    ny = nvy - 1
-    nplaq = nx * ny
-    
-    z_coeffs = defaultdict(float)
-    zz_coeffs = defaultdict(float)
-    for v1, v2, weight in primal_graph.edge_index_map().values():
-        x1, y1 = primal_graph[v1]
-        x2, y2 = primal_graph[v2]
-        if x1 == x2:
-            # Vertical primal link
-            if x1 == 0:
-                z_coeffs[y1 * nx] += weight
-            elif x1 == nvx - 1:
-                z_coeffs[(y1 + 1) * nx - 1] += weight
-            else:
-                zz_coeffs[(y1 * nx + x1 - 1, y1 * nx + x1)] += weight
-        else:
-            # Horizontal primal link
-            if y1 == 0:
-                z_coeffs[x1] += weight
-            elif y1 == nvy - 1:
-                z_coeffs[(y1 - 1) * nx + x1] += weight
-            else:
-                zz_coeffs[((y1 - 1) * nx + x1, y1 * nx + x1)] += weight
-
-    return make_apply_h_from_coeffs(nplaq, z_coeffs, zz_coeffs)
 
 
 if __name__ == '__main__':
@@ -56,7 +24,7 @@ if __name__ == '__main__':
     parser.add_argument('ny', type=int)
     parser.add_argument('--charges', nargs=2)
     parser.add_argument('--mu')
-    parser.add_argument('--out', default='.')
+    parser.add_argument('--out', default='square_lattice_ising.h5')
     parser.add_argument('--save-eigvec', action='store_true')
     parser.add_argument('--gpus')
     parser.add_argument('--mpi', nargs='?', const=True)
@@ -89,8 +57,9 @@ if __name__ == '__main__':
     nplaq = nx * ny
 
     primal_graph = make_primal_graph(nx, ny, options.charges)
-    apply_h = make_apply_h(primal_graph)
-    
+    z_coeffs, zz_coeffs = get_hamiltonian_coeffs(primal_graph)
+    apply_h = make_apply_h_from_coeffs(nplaq, z_coeffs, zz_coeffs)
+
     if jax.process_index() == 0:
         with h5py.File(options.out, 'w') as out:
             out.create_dataset('mus', data=mus)
