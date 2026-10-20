@@ -1,11 +1,18 @@
 """Gaussian kernel density estimation for sharded one-dimensional data."""
 from functools import partial
+from typing import Optional
 import jax
 import jax.numpy as jnp
 
 
-@partial(jax.jit, static_argnames=['num_point', 'batch_size'])
-def gaussian_kde(data: jax.Array, num_point: int, batch_size: int = 16):
+@partial(jax.jit, static_argnames=['num_point', 'scale', 'batch_size'])
+def gaussian_kde(
+    data: jax.Array,
+    num_point: int,
+    scale: str = 'linear',
+    mask: Optional[jax.Array] = None,
+    batch_size: int = 16
+):
     """Gaussian kernel density estimator of a 1D (possibly sharded) array.
 
     The estimator is evaluated at num_point points evenly spaced between min(data) and max(data),
@@ -25,19 +32,32 @@ def gaussian_kde(data: jax.Array, num_point: int, batch_size: int = 16):
     Returns:
         Tuple (points, density) of arrays of shape (num_point,). The density is replicated.
     """
-    n = data.shape[0]
-    data = data.astype(jnp.result_type(data.dtype, jnp.float32))
-    points = jnp.linspace(jnp.min(data), jnp.max(data), num_point)
-
-    # Scott's rule
-    mean = jnp.mean(data)
-    std = jnp.sqrt(jnp.sum(jnp.square(data - mean)) / (n - 1))
+    if mask is None:
+        n = data.shape[0]
+        dmin, dmax = jnp.min(data), jnp.max(data)
+        mean = jnp.mean(data)
+        std = jnp.sqrt(jnp.sum(jnp.square(data - mean)) / (n - 1))
+    else:
+        n = jnp.sum(mask)
+        dmin = jnp.min(jnp.where(mask, data, jnp.inf))
+        dmax = jnp.max(jnp.where(mask, data, -jnp.inf))
+        mean = jnp.sum(data * mask) / n
+        std = jnp.sqrt(jnp.sum(jnp.square(data - mean) * mask) / (n - 1))
+        
     bandwidth = std * n ** (-1. / 5.)
 
     def eval_point(x):
         z = (x - data) / bandwidth
-        return jnp.sum(jnp.exp(-0.5 * jnp.square(z)))
+        if mask is None:
+            return jnp.sum(jnp.exp(-0.5 * jnp.square(z)))
+        return jnp.sum(jnp.exp(-0.5 * jnp.square(z)) * mask)
 
+    if scale == 'linear':
+        points = jnp.linspace(dmin, dmax, num_point)
+    elif scale == 'geom':
+        points = jnp.geomspace(dmin, dmax, num_point)
+    else:
+        raise ValueError('Invalid scale name')
     kernel_sum = jax.lax.map(eval_point, points, batch_size=min(batch_size, num_point))
     density = kernel_sum / (n * bandwidth * jnp.sqrt(2. * jnp.pi))
     return points, density
