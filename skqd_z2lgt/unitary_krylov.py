@@ -5,7 +5,7 @@ import jax
 import jax.numpy as jnp
 from jax.experimental.ode import odeint
 from heavyhex_qft.triangular_z2 import TriangularZ2Lattice
-from skqd_z2lgt.ground_locg import ground_locg
+from rqutils.ground_locg import ground_locg
 
 
 def make_hvec(hamiltonian, variable=False, dtype=np.complex128):

@@ -1,8 +1,7 @@
+"""Subroutines to set up multi-GPU / multi-host mesh and shardings."""
 import os
 import string
-from pathlib import Path
 import logging
-from typing import Optional
 import numpy as np
 import h5py
 import jax
@@ -12,13 +11,13 @@ from jax.experimental.mesh_utils import create_hybrid_device_mesh
 LOG = logging.getLogger(__name__)
 
 
-def parse_gpus(gpus):
+def parse_gpus(gpus: str | list):
     if isinstance(gpus, list):
         return ','.join(f'{d}' for d in gpus)
     return gpus
 
 
-def qubit_sharding(mpi=False, gpus=None, set_mesh=True):
+def qubit_sharding(mpi: bool | str = False, gpus: str | list = None, set_mesh: bool = True):
     """Return a NamedSharding over a mesh with shape (2,)*(log2 NGPU)."""
     if mpi:
         from mpi4py import MPI

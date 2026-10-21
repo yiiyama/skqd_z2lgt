@@ -1,15 +1,20 @@
+"""Standard perturbation theory coefficients calculator."""
 import jax
 import jax.numpy as jnp
 from rqutils.sqd import get_xsource
 
 
 @jax.jit(static_argnames=['nplaq', 'max_order'])
-def make_perturbation_series(nplaq, max_order, states_p, lengths):
-    xsources = jax.lax.scan(
-        lambda _, x: (None, get_xsource(x, states_p, sorted_input=False)),
-        None,
+def make_perturbation_series(
+    nplaq: int,
+    max_order: int,
+    states_p: jax.Array,
+    lengths: jax.Array
+):
+    xsources = jax.lax.map(
+        lambda x: get_xsource(x, states_p, sorted_input=False),
         jnp.packbits(jnp.eye(nplaq, dtype=jnp.uint8), axis=1)
-    )[1]
+    )
     ecoeffs = jnp.zeros(max_order // 2)
     acoeffs = jnp.zeros((max_order, states_p.shape[0]))
     single_plaq = jnp.sum(jnp.bitwise_count(states_p), axis=1) == 1

@@ -1,11 +1,14 @@
-"""Yet another Hv-op and Uv-op maker. Used in ground_4x8.py."""
+"""Yet another set of Hv-op and Uv-op makers."""
+from typing import Optional
 import numpy as np
 import jax
 import jax.numpy as jnp
 from jax.sharding import NamedSharding, PartitionSpec, AxisType
+from qiskit.quantum_info import SparsePauliOp
 
 
-def get_coeffs(hamiltonian):
+def get_coeffs(hamiltonian: SparsePauliOp):
+    """Extract the Z, ZZ, and X term coefficients from a TFIM Hamiltonian."""
     z_coeffs = {}
     zz_coeffs = {}
     x_coeff = 0.
@@ -31,7 +34,8 @@ def get_coeffs(hamiltonian):
     return z_coeffs, zz_coeffs, x_coeff
 
 
-def get_shape_and_shardings(vec, qubit_partitioning):
+def get_shape_and_shardings(vec: jax.Array, qubit_partitioning: tuple[int, ...]):
+    """Utility function to determine how vec should be reshaped and resharded."""
     shape = tuple(2 ** np.array(qubit_partitioning))
 
     sharding = jax.typeof(vec).sharding
@@ -49,7 +53,7 @@ def get_shape_and_shardings(vec, qubit_partitioning):
     return shape, sharding, NamedSharding(sharding.mesh, PartitionSpec(*partitions))
 
 
-def make_apply_h(hamiltonian, axis_type=AxisType.Auto):
+def make_apply_h(hamiltonian: SparsePauliOp, axis_type: AxisType = AxisType.Auto):
     """Apply-H highly optimized for the Ising Hamiltonian of the 2D Z2 LGT.
 
     Supply a NamedSharding compatible with a shape (2,) * nq array if sharding the input vector.
@@ -59,7 +63,13 @@ def make_apply_h(hamiltonian, axis_type=AxisType.Auto):
     return make_apply_h_from_coeffs(nq, z_coeffs, zz_coeffs, x_coeff, axis_type=axis_type)
 
 
-def make_apply_h_from_coeffs(nq, z_coeffs, zz_coeffs, x_coeff=None, axis_type=AxisType.Auto):
+def make_apply_h_from_coeffs(
+    nq: int,
+    z_coeffs: dict[int, float],
+    zz_coeffs: dict[tuple[int, int], float],
+    x_coeff: Optional[float] = None,
+    axis_type: AxisType = AxisType.Auto
+):
     def make_apply_z(qubit, coeff):
         def apply_z(vec):
             qpart = (nq - qubit - 1, 1, qubit)
