@@ -29,7 +29,7 @@ dependencies = [
     "optax",
     "flax",
     "prefect",
-    "qcsc-prefect",
+    "qcsc-prefect[qiskit]",
     "mpi4py",
     "rqutils",
     "heavyhex-qft"
