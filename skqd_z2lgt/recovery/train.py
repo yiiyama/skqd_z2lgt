@@ -99,9 +99,9 @@ def make_train_loop(train_epoch, compute_test_metrics, best_cond, convergence, n
     @nnx.jit
     def train_loop(model, optimizer, metrics_train, metrics_test, data, data_test, rngs):
         records = {f'train_{name}': jnp.empty((n_epochs, tr_shape[0]))
-                    for name in ['loss'] + metrics_train._metric_names}
+                    for name in ('loss',) + metrics_train._metric_names}
         records |= {f'test_{name}': jnp.empty(n_epochs)
-                    for name in ['loss'] + metrics_test._metric_names}
+                    for name in ('loss',) + metrics_test._metric_names}
         return jax.lax.while_loop(
             lambda val: (val[0] < n_epochs) & ~convergence(val[0], val[2]),
             loop_body,

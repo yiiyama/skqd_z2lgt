@@ -13,12 +13,8 @@ from prefect.context import get_run_context
 from prefect.filesystems import LocalFileSystem
 from prefect.variables import Variable
 from qcsc_prefect_executor.from_blocks import run_job_from_blocks
+from qcsc_prefect_blocks.common import HPCProfileBlock
 from qcsc_prefect.integrations.qiskit import QiskitRuntimeConfig
-# from qcsc_prefect.integrations.qiskit.input_digest import build_qiskit_sampler_input_digest
-# from qcsc_prefect.integrations.qiskit.cache import qiskit_sampler_submit_cache_key
-from qiskit import QuantumCircuit
-from qiskit_ibm_runtime import Batch, QiskitRuntimeService
-from qiskit_ibm_runtime.executor_sampler import Sampler
 from skqd_z2lgt.orchestration.common import make_lattice
 from skqd_z2lgt.orchestration.parameters import Parameters
 from skqd_z2lgt.orchestration.open_output import open_output, open_from_yaml
@@ -171,16 +167,34 @@ async def preprocess(parameters: Parameters):
 
 @materialize('file://', asset_deps=[])
 async def train_generators(parameters: Parameters):
-    exit_statuses = {}
+    logger = get_run_logger()
+
+    gpus = None
+    hpc_profile = await HPCProfileBlock.load(parameters.hpc_profile)
+    if hpc_profile.hpc_target == 'local':
+        gpus = Variable.get(parameters.hpc_profile).get('gpus')
+
+    futures = {}
+    igpu = 0
     for idt in range(len(parameters.circuit.dts)):
         for step in parameters.circuit.sampled_steps:
-            exit_status = await train_single_generator.with_options(
+            if os.path.exists(Path(parameters.pkgpath) / f'crbm/dt{idt}_k{step}.h5'):
+                logger.info('CRBM weights for dt%d_k%d exist', idt, step)
+                continue
+
+            add_args = []
+            if gpus:
+                add_args += ['--gpu', str(gpus[igpu])]
+                igpu = (igpu + 1) % len(gpus)
+
+            future = await train_single_generator.with_options(
                 assets=[(Path(parameters.pkgpath) / f'crbm/dt{idt}_k{step}.h5').as_uri()],
                 asset_deps=[(Path(parameters.pkgpath) / f'data/reco/dt{idt}_k{step}.h5').as_uri()],
                 name=f'train_single_generator_dt{idt}_k{step}'
-            )(parameters, idt, step)
-            exit_statuses[(idt, step)] = exit_status
+            ).submit(parameters, idt, step, add_args)
+            futures[(idt, step)] = future
 
+    exit_statuses = {key: fut.result() for key, fut in futures.items()}
     if any(s != 0 for s in exit_statuses.values()):
         raise RuntimeError(f"Train generators job failed: exit_statuses={exit_statuses}")
 
@@ -188,7 +202,7 @@ async def train_generators(parameters: Parameters):
 
 
 @materialize('file://', asset_deps=[])
-async def train_single_generator(parameters: Parameters, idt: int, step: int):
+async def train_single_generator(parameters: Parameters, idt: int, step: int, add_args: list[str]):
     result = await run_job_from_blocks(
         command_block_name='python',
         execution_profile_block_name='python-gpu-single',
@@ -199,7 +213,7 @@ async def train_single_generator(parameters: Parameters, idt: int, step: int):
             parameters.pkgpath,
             '--idt', f'{idt}',
             '--step', f'{step}'
-        ],
+        ] + add_args,
         execution_profile_overrides={'walltime': '02:00:00'}
     )
     if result.exit_status != 0:
