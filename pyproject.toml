@@ -36,4 +36,5 @@ dependencies = [
 ]
 
 [project.scripts]
-skqd-z2lgt-deploy = "skqd_z2lgt.main:deploy"
+skqd-z2lgt = "skqd_z2lgt.orchestration.main:run"
+skqd-z2lgt-deploy = "skqd_z2lgt.orchestration.main:deploy"

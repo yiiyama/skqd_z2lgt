@@ -259,20 +259,7 @@ async def diagonalize(parameters: Parameters):
     return load_skqd_result(parameters, 'cr')[0][-1]
 
 
-def deploy():
-    """Deploy workflow with a local worker."""
-    # Prefect deploys with relative path.
-    # Workflow is now installed in site-packages.
-    os.chdir(Path(__file__).parent)
-
-    # Deploy the workflow with specified options.
-    skqd_z2lgt.with_options(version=os.getenv("WF_VERSION", "unknown")).serve(
-        name="skqd_z2lgt",
-        description="SKQD experiment for Z2 LGT."
-    )
-
-
-if __name__ == '__main__':
+def run():
     from argparse import ArgumentParser
 
     parser = ArgumentParser(prog='skqd_z2lgt')
@@ -298,3 +285,16 @@ if __name__ == '__main__':
         storage.save(block_name)
 
     asyncio.run(skqd_z2lgt.with_options(result_storage=storage)(parameters))
+
+
+def deploy():
+    """Deploy workflow with a local worker."""
+    # Prefect deploys with relative path.
+    # Workflow is now installed in site-packages.
+    os.chdir(Path(__file__).parent)
+
+    # Deploy the workflow with specified options.
+    skqd_z2lgt.with_options(version=os.getenv("WF_VERSION", "unknown")).serve(
+        name="skqd_z2lgt",
+        description="SKQD experiment for Z2 LGT."
+    )
