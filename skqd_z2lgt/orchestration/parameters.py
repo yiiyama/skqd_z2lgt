@@ -118,21 +118,6 @@ class RuntimeParameters(BaseModel):
         description='Name of the QiskitRuntimeConfig block name.',
         title='QiskitRuntimeConfig block'
     )
-    job_id: str | None = Field(
-        default=None,
-        description='ID of an existing IBM Quantum workload.',
-        title='Runtime Job ID'
-    )
-    instance: str | None = Field(
-        default=None,
-        description='IBM Quantum instance name or CRN. Must be a CRN if used with Prefect Qiskit.',
-        title='IBM Quantum Instance'
-    )
-    backend: str | None = Field(
-        default=None,
-        description='Backend name.',
-        title='Backend Name'
-    )
     shots_exp: int = Field(
         default=100_000,
         description='Shots per experiment circuit.',
@@ -142,11 +127,6 @@ class RuntimeParameters(BaseModel):
         default=500_000,
         description='Shots per reference circuit.',
         title='Shots (Reference)'
-    )
-    options: str | dict[str, Any] = Field(
-        default_factory=dict,
-        description='Runtime options dict or the name of the Prefect Variable.',
-        title='Runtime Options'
     )
 
 
@@ -273,7 +253,43 @@ class Parameters(BaseModel):
         title='Output package name'
     )
 
+    python_cmd: str = Field(
+        default='python',
+        description='Name of the HPC Command block for standard Python.',
+        title='Python HPC Command block name'
+    )
+
+    python_cuda_cmd: str | None = Field(
+        default=None,
+        description='Name of the HPC Command block for CUDA-enabled Python'
+                    ' (if different from standard).',
+        title='Python (CUDA) HPC Command block name'
+    )
+
+    python_cpu_single_exec_profile: str = Field(
+        default='python-cpu-single',
+        description='Name of the Execution profile block for CPU-bound single-node Python job.',
+        title='Python CPU-bound single-node execution profile'
+    )
+
+    python_gpu_single_exec_profile: str = Field(
+        default='python-gpu-single',
+        description='Name of the Execution profile block for GPU-bound single-node Python job.',
+        title='Python GPU-bound single-node execution profile'
+    )
+
+    python_gpu_mpi_exec_profile: str = Field(
+        default='python-gpu-mpi',
+        description='Name of the Execution profile block for GPU-bound single-node Python job.',
+        title='Python GPU-bound single-node execution profile'
+    )
+
     hpc_profile: str = Field(
+        default='local',
         description='Name of the HPC Profile block.',
         title='HPC Profile block name'
     )
+
+    def model_post_init(self, _):  # pylint: disable=arguments-differ
+        if self.python_cuda_cmd is None:
+            self.python_cuda_cmd = self.python_cmd

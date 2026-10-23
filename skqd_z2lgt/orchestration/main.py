@@ -108,11 +108,12 @@ def assert_assets(context, inputs):
 @materialize('file://')
 async def dmrg(parameters: Parameters):
     result = await run_job_from_blocks(
-        command_block_name='python',
-        execution_profile_block_name='python-cpu-single',
+        command_block_name=parameters.python_cmd,
+        execution_profile_block_name=parameters.python_cpu_single_exec_profile,
         hpc_profile_block_name=parameters.hpc_profile,
         work_dir=Path(parameters.pkgpath) / 'work',
         user_args=[str(Path(__file__).parents[0] / 'dmrg.py'), parameters.pkgpath],
+        script_filename='dmrg',
         execution_profile_overrides={'walltime': '01:00:00'}
     )
     if result.exit_status != 0:
@@ -152,11 +153,12 @@ async def sample_quantum(parameters: Parameters):
 @materialize('file://', asset_deps=[])
 async def preprocess(parameters: Parameters):
     result = await run_job_from_blocks(
-        command_block_name='python',
-        execution_profile_block_name='python-cpu-single',
+        command_block_name=parameters.python_cmd,
+        execution_profile_block_name=parameters.python_cpu_single_exec_profile,
         hpc_profile_block_name=parameters.hpc_profile,
         work_dir=Path(parameters.pkgpath) / 'work',
         user_args=[str(Path(__file__).parents[0] / 'preprocess.py'), parameters.pkgpath],
+        script_filename='preprocess',
         execution_profile_overrides={'walltime': '00:30:00'}
     )
     if result.exit_status != 0:
@@ -172,7 +174,7 @@ async def train_generators(parameters: Parameters):
     gpus = None
     hpc_profile = await HPCProfileBlock.load(parameters.hpc_profile)
     if hpc_profile.hpc_target == 'local':
-        gpus = Variable.get(parameters.hpc_profile).get('gpus')
+        gpus = (await Variable.get(parameters.hpc_profile)).get('gpus')
 
     futures = {}
     igpu = 0
@@ -187,7 +189,7 @@ async def train_generators(parameters: Parameters):
                 add_args += ['--gpu', str(gpus[igpu])]
                 igpu = (igpu + 1) % len(gpus)
 
-            future = await train_single_generator.with_options(
+            future = train_single_generator.with_options(
                 assets=[(Path(parameters.pkgpath) / f'crbm/dt{idt}_k{step}.h5').as_uri()],
                 asset_deps=[(Path(parameters.pkgpath) / f'data/reco/dt{idt}_k{step}.h5').as_uri()],
                 name=f'train_single_generator_dt{idt}_k{step}'
@@ -204,8 +206,8 @@ async def train_generators(parameters: Parameters):
 @materialize('file://', asset_deps=[])
 async def train_single_generator(parameters: Parameters, idt: int, step: int, add_args: list[str]):
     result = await run_job_from_blocks(
-        command_block_name='python',
-        execution_profile_block_name='python-gpu-single',
+        command_block_name=parameters.python_cuda_cmd,
+        execution_profile_block_name=parameters.python_gpu_single_exec_profile,
         hpc_profile_block_name=parameters.hpc_profile,
         work_dir=Path(parameters.pkgpath) / 'work',
         user_args=[
@@ -214,6 +216,7 @@ async def train_single_generator(parameters: Parameters, idt: int, step: int, ad
             '--idt', f'{idt}',
             '--step', f'{step}'
         ] + add_args,
+        script_filename=get_run_context().task.name,
         execution_profile_overrides={'walltime': '02:00:00'}
     )
     if result.exit_status != 0:
@@ -233,12 +236,12 @@ async def diagonalize(parameters: Parameters):
     num_p = make_lattice(parameters).num_active_plaquettes
     pt_core_size = sum(math.comb(num_p, i) for i in range(parameters.skqd.pt_core_max + 1))
     xcache_size_gib = 4 * (gen_size + pt_core_size) * (num_p + 1) / (2 ** 30)
-    gpu_memory_gib = Variable.get(parameters.hpc_profile)['gpu_memory_gib']
+    gpu_memory_gib = (await Variable.get(parameters.hpc_profile)).get('gpu_memory_gib', 80)
     num_nodes = 2 ** int(math.ceil(math.log2(math.ceil(xcache_size_gib / gpu_memory_gib * 4))))
 
     result = await run_job_from_blocks(
-        command_block_name='python',
-        execution_profile_block_name='python-gpu-mpi',
+        command_block_name=parameters.python_cuda_cmd,
+        execution_profile_block_name=parameters.python_gpu_mpi_exec_profile,
         hpc_profile_block_name=parameters.hpc_profile,
         work_dir=Path(parameters.pkgpath) / 'work',
         user_args=[
@@ -246,6 +249,7 @@ async def diagonalize(parameters: Parameters):
             parameters.pkgpath,
             'cr'
         ],
+        script_filename='diagonalize',
         execution_profile_overrides={'walltime': '08:00:00', 'num_nodes': num_nodes}
     )
     if result.exit_status != 0:
