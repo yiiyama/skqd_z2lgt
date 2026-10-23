@@ -50,6 +50,8 @@ def _decode(link_state, dual_lattice, matching, magnetic_mask):
     corrected_link_state = link_state ^ correction
     # If the corrected link state have excitations *wrt base* at magnetic charges, flip
     plaq_state = dual_lattice.decode_link_to_plaq(corrected_link_state)
+    if magnetic_mask is None:
+        return e_syndrome, plaq_state
     syndrome = np.concatenate([e_syndrome, plaq_state[magnetic_mask]])
     return syndrome, plaq_state[~magnetic_mask]
 
@@ -99,17 +101,19 @@ def decode_all(
 
 def _decode_batch(batch_array, num_bits, dual_lattice):
     lattice = dual_lattice.primal
-    matching = Matching(csc_matrix(lattice.vl_matrix))
-    magnetic_mask = np.ones(dual_lattice.num_plaquettes, dtype=bool)
     active_idx = [lattice.plaquette_id_to_idx(pid) for pid in lattice.active_plaquette_ids]
-    magnetic_mask[active_idx] = False
-    nmag = lattice.num_plaquettes - len(active_idx)
+    if (nmag := lattice.num_plaquettes - len(active_idx)) == 0:
+        magnetic_mask = None
+    else:
+        magnetic_mask = np.ones(dual_lattice.num_plaquettes, dtype=bool)
+        magnetic_mask[active_idx] = False
 
     out = (
         np.empty((batch_array.shape[0], lattice.num_vertices + nmag), dtype=np.uint8),
         np.empty((batch_array.shape[0], len(active_idx)), dtype=np.uint8)
     )
 
+    matching = Matching(csc_matrix(lattice.vl_matrix))
     link_states = read_bits(batch_array, num_bits=num_bits, align='right')
     for ishot, link_state in enumerate(link_states):
         syndrome, plaq_state = _decode(link_state, dual_lattice, matching, magnetic_mask)
