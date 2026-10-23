@@ -9,8 +9,7 @@ import jax.numpy as jnp
 from rqutils.paulis.symplectic import PauliSumXZ
 from rqutils.sqd import run_sqd
 from skqd_z2lgt.perturbative_sqd import make_pt_core
-sys.path.append(str(Path(__file__).parents[1] / 'lib'))
-from square_ising import make_primal_graph, get_hamiltonian_coeffs
+from skqd_z2lgt.square_ising import make_primal_graph, get_hamiltonian_coeffs
 
 
 if __name__ == '__main__':
