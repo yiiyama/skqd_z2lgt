@@ -40,26 +40,23 @@ def save_dmrg(
 
 def save_raw(
     parameters: Parameters,
-    pub_result: PrimitiveResult,
+    bit_array: BitArray,
+    etype: str,
+    idt: int,
+    step: int,
     logger: Optional[logging.Logger] = None
 ):
     """Save the sampled bitstrings to files."""
     logger = logger or logging.getLogger(__name__)
-    logger.info('Saving raw link data')
+    logger.info('Saving raw link data %s_dt%d_k%d', etype, idt, step)
     dirpath = Path(parameters.pkgpath) / 'data' / 'raw'
     os.makedirs(dirpath, exist_ok=True)
 
-    ires = 0
-    for etype in ['exp', 'ref']:
-        for idt, dt in enumerate(parameters.circuit.dts):
-            for step in parameters.circuit.sampled_steps:
-                path = dirpath / f'{etype}_dt{idt}_k{step}.h5'
-                with h5py.File(path, 'w', libver='latest') as out:
-                    out.attrs['delta_t'] = dt
-                    bit_array = pub_result[ires].data.c
-                    dataset = out.create_dataset('link', data=bit_array.array)
-                    dataset.attrs['num_bits'] = bit_array.num_bits
-                    ires += 1
+    path = dirpath / f'{etype}_dt{idt}_k{step}.h5'
+    with h5py.File(path, 'w', libver='latest') as out:
+        out.attrs['delta_t'] = parameters.circuit.dts[idt]
+        dataset = out.create_dataset('link', data=bit_array.array)
+        dataset.attrs['num_bits'] = bit_array.num_bits
 
 
 def load_raw(

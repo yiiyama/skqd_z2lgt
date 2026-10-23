@@ -1,11 +1,16 @@
 """Compose the Krylov circuits and run the quantum runtime sampler."""
+import os
 import logging
+from pathlib import Path
 from typing import Optional
 from qiskit.circuit import QuantumCircuit
 from qiskit.transpiler import Target
+from qiskit_ibm_runtime import QiskitRuntimeService, IBMBackend, Batch
+from qiskit_ibm_runtime.executor_sampler import Sampler
 from skqd_z2lgt.circuits import make_step_circuits, compose_trotter_circuits
 from skqd_z2lgt.utils import minimum_weight_link_state
 from skqd_z2lgt.orchestration.parameters import Parameters
+from skqd_z2lgt.orchestration.io import save_raw
 from skqd_z2lgt.orchestration.common import make_lattice
 
 
@@ -38,25 +43,79 @@ def get_trotter_circuits(
     initial_state = minimum_weight_link_state(parameters.lgt.charged_vertices,
                                               parameters.lgt.charged_plaquettes, lattice)
 
-    exp_circuits = []
-    ref_circuits = []
-    for dt in parameters.circuit.dts:
-        circuits, layout = make_step_circuits(
+    steps = parameters.circuit.sampled_steps
+    all_circuits = {}
+    for idt, dt in enumerate(parameters.circuit.dts):
+        snippets, layout = make_step_circuits(
             lattice, parameters.lgt.plaquette_energy, dt, target, initial_state=initial_state,
             layout=parameters.circuit.layout,
             optimization_level=parameters.circuit.optimization_level
         )
-        steps = parameters.circuit.sampled_steps
-        exp_circuits.append(
-            compose_trotter_circuits(circuits[0], circuits[1], circuits[3], circuits[5], steps)
-        )
-        ref_circuits.append(
-            compose_trotter_circuits(circuits[0], circuits[2], circuits[4], circuits[5], steps)
-        )
-    return layout, exp_circuits, ref_circuits
+        circuits = compose_trotter_circuits(snippets[0], snippets[1], snippets[3], snippets[5],
+                                            steps)
+        all_circuits |= {('exp', idt, s): c for s, c in zip(steps, circuits)}
+        circuits = compose_trotter_circuits(snippets[0], snippets[2], snippets[4], snippets[5],
+                                            steps)
+        all_circuits |= {('ref', idt, s): c for s, c in zip(steps, circuits)} 
+    return layout, all_circuits
 
 
-def compile_pubs(parameters, exp_circuits, ref_circuits):
-    pubs = [(circ, [], parameters.runtime.shots_exp) for circ in sum(exp_circuits, [])]
-    pubs += [(circ, [], parameters.runtime.shots_ref) for circ in sum(ref_circuits, [])]
-    return pubs
+def filter_out_completed(
+    parameters: Parameters,
+    circuits: dict[tuple[str, int, int], QuantumCircuit],
+    task_map: dict[str, list],
+    service: Optional[QiskitRuntimeService] = None,
+    logger: Optional[logging.Logger] = None
+):
+    """Drop circuits that already have sampled results locally or in the cloud."""
+    if service is None:
+        service = QiskitRuntimeService()
+
+    logger = logger or logging.getLogger(__name__)
+    
+    raw_data_path = Path(parameters.pkgpath) / 'data/raw'
+    # Drop circuits whose raw data already exist
+    for etype, idt, step in list(circuits.keys()):
+        if os.path.exists(raw_data_path / f'{etype}_dt{idt}_k{step}.h5'):
+            logger.info('Raw data %s_dt%d_k%d exists', etype, idt, step)
+            circuits.pop((etype, idt, step))
+
+    # Check the existing task map and fetch missing results. Drop circuits whose results are
+    # successfully recovered
+    for job_id, key in task_map.items():
+        key = tuple(key)
+        if key in circuits:
+            logger.info('Fetching job result for %s_dt%d_k%d', etype, idt, step)    
+            job = service.job(job_id)
+            result = job.result()
+            save_raw(parameters, result[0].data.c, *key)
+            circuits.pop(key)
+
+    return circuits
+
+
+def run_sampler(
+    parameters: Parameters,
+    circuits: dict[tuple[str, int, int], QuantumCircuit],
+    backend: IBMBackend,
+    logger: Optional[logging.Logger] = None
+):
+    """Submit sampler jobs and fetch the results."""
+    logger = logger or logging.getLogger(__name__)
+
+    logger.info('Submitting jobs for %d circuits', len(circuits))
+
+    jobs = {}
+    with Batch(backend=backend):
+        sampler = Sampler()
+        for (etype, idt, step), circuit in circuits.items():
+            shots = getattr(parameters.runtime, f'shots_{etype}')
+            job = sampler.run([circuit], shots=shots)
+            jobs[(etype, idt, step)] = job
+
+    task_map = {}
+    for (etype, idt, step), job in jobs.items():
+        save_raw(parameters, job.result()[0].data.c, etype, idt, step)
+        task_map[job.job_id()] = [etype, idt, step]
+
+    return task_map

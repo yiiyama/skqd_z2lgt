@@ -1,53 +1,38 @@
-"""Definition of the main Prefect flow for Z2LGT SKQD."""
 import os
+import asyncio
 from pathlib import Path
 import logging
-import asyncio
+import json
 import tempfile
 import math
-import json
-from concurrent.futures import ThreadPoolExecutor
-from prefect import flow, task, get_run_logger
-from prefect.client.schemas.filters import (ArtifactFilter, ArtifactFilterKey,
-                                            ArtifactFilterTaskRunId)
-from prefect.client.orchestration import get_client
+import hashlib
+from prefect import flow, get_run_logger
+from prefect.assets import materialize
+from prefect.cache_policies import CacheKeyFnPolicy
+from prefect.context import get_run_context
+from prefect.filesystems import LocalFileSystem
 from prefect.variables import Variable
-from prefect.runtime import task_run
-from prefect_qiskit.runtime import QuantumRuntime
-from prefect_qiskit.primitives import PrimitiveJobRun
-from prefect_miyabi import MiyabiJobBlock
+from qcsc_prefect_executor.from_blocks import run_job_from_blocks
+from qcsc_prefect.integrations.qiskit import QiskitRuntimeConfig
+# from qcsc_prefect.integrations.qiskit.input_digest import build_qiskit_sampler_input_digest
+# from qcsc_prefect.integrations.qiskit.cache import qiskit_sampler_submit_cache_key
+from qiskit import QuantumCircuit
+from qiskit_ibm_runtime import Batch, QiskitRuntimeService
+from qiskit_ibm_runtime.executor_sampler import Sampler
 from skqd_z2lgt.orchestration.common import make_lattice
 from skqd_z2lgt.orchestration.parameters import Parameters
 from skqd_z2lgt.orchestration.open_output import open_output, open_from_yaml
-from skqd_z2lgt.orchestration.sample_quantum import get_trotter_circuits, compile_pubs
-from skqd_z2lgt.orchestration.io import load_dmrg, load_skqd_result
-from skqd_z2lgt.orchestration.flows import (
-    dmrg_flow,
-    sample_quantum_flow,
-    preprocess_flow,
-    train_generator_flow,
-    diagonalize_flow
+from skqd_z2lgt.orchestration.sample_quantum import (
+    get_trotter_circuits,
+    filter_out_completed,
+    run_sampler
 )
+from skqd_z2lgt.orchestration.io import load_dmrg, load_skqd_result
 
-SCRIPT_DIR = Path(__file__).parents[1] / '_scripts'
 
-
-@flow
-async def skqd_z2lgt(
-    parameters: Parameters,
-    runtime_name: str = 'ibm-runner',
-    cpujob_block_name: str = 'cpu-script',
-    cudajob_block_name: str = 'cuda-script'
-) -> float:
-    """Calculation of ground-state energy of Z2 LGT using SKQD.
-
-    Args:
-        parameters: Configuration parameters.
-        runtime_name: Name of QuantumRunner block.
-        cpujob_block_name: Name of the MiyabiJobBlock that executes a python script.
-        cudajob_block_name: Name of the MiyabiJobBlock that executes a python script in a CUDA
-            environment.
-    """
+@flow(persist_result=True, result_serializer='json')
+async def skqd_z2lgt(parameters: Parameters) -> float:
+    """Calculation of ground-state energy of Z2 LGT using SKQD."""
     logger = get_run_logger()
     logger.setLevel(logging.INFO)
 
@@ -57,12 +42,47 @@ async def skqd_z2lgt(
         parameters.pkgpath = tmpdir.name
 
     open_output(parameters, logger)
+    suffices = [f'dt{idt}_k{step}'
+                for idt in range(len(parameters.circuit.dts))
+                for step in parameters.circuit.sampled_steps]
+    raw_filenames = [f'data/raw/{e}_{s}.h5' for e in ['exp', 'ref'] for s in suffices]
+    reco_exp_filenames = [f'data/reco/exp_{s}.h5' for s in suffices]
+    reco_ref_filenames = [f'data/reco/ref_{s}.h5' for s in suffices]
+    reco_filenames = reco_exp_filenames + reco_ref_filenames
+    crbm_filenames = [f'crbm/{s}.h5' for s in suffices]
+
+    cache_policy = CacheKeyFnPolicy(cache_key_fn=assert_assets).configure(
+        key_storage=Path(get_run_context().result_store.result_storage.basepath) / 'cache_keys'
+    )
+
     if parameters.dmrg:
-        dmrg_future = dmrg.submit(parameters, cpujob_block_name=cpujob_block_name)
-    await sample_quantum(parameters, runtime_name=runtime_name)
-    await preprocess(parameters, cpujob_block_name=cpujob_block_name)
-    await train_generator(parameters, cudajob_block_name=cudajob_block_name)
-    energy_cr = await diagonalize(parameters, 'cr', cudajob_block_name=cudajob_block_name)
+        dmrg_future = dmrg.with_options(
+            assets=[(Path(parameters.pkgpath) / 'dmrg.h5').as_uri()],
+            cache_policy=cache_policy
+        ).submit(parameters)
+    
+    await sample_quantum.with_options(
+        assets=[(Path(parameters.pkgpath) / f).as_uri() for f in raw_filenames],
+        cache_policy=cache_policy
+    )(parameters)
+
+    await preprocess.with_options(
+        assets=[(Path(parameters.pkgpath) / f).as_uri() for f in reco_filenames],
+        asset_deps=[(Path(parameters.pkgpath) / f).as_uri() for f in raw_filenames],
+        cache_policy=cache_policy
+    )(parameters)
+
+    await train_generators.with_options(
+        assets=[(Path(parameters.pkgpath) / f).as_uri() for f in crbm_filenames],
+        asset_deps=[(Path(parameters.pkgpath) / f).as_uri() for f in reco_ref_filenames],
+        cache_policy=cache_policy
+    )(parameters)
+
+    energy_cr = await diagonalize.with_options(
+        assets=[(Path(parameters.pkgpath) / 'skqd_cr.h5').as_uri()],
+        asset_deps=[(Path(parameters.pkgpath) / f).as_uri() for f in reco_exp_filenames],
+        cache_policy=cache_policy
+    )(parameters)
 
     if tmpdir:
         tmpdir.cleanup()
@@ -76,254 +96,149 @@ async def skqd_z2lgt(
     return energy_cr
 
 
-@task
-async def dmrg(
-    parameters: Parameters,
-    cpujob_block_name: str
-) -> float:
-    """Run DMRG and MPS sampling."""
+def assert_assets(context, inputs):
+    """Remove the cache key file if any asset is missing."""
+    cache_key = context.task.name
+    # Path.from_uri() is available only for python>=3.13
+    if not all(os.path.exists(a.key.replace('file://', '')) for a in context.task.assets):
+        try:
+            os.unlink(Path(context.task.cache_policy.key_storage) / cache_key)
+        except FileNotFoundError:
+            pass
+
+    return cache_key
+
+
+@materialize('file://')
+async def dmrg(parameters: Parameters):
+    result = await run_job_from_blocks(
+        command_block_name='python',
+        execution_profile_block_name='python-cpu-single',
+        hpc_profile_block_name=parameters.hpc_profile,
+        work_dir=Path(parameters.pkgpath) / 'work',
+        user_args=[str(Path(__file__).parents[0] / 'dmrg.py'), parameters.pkgpath],
+        execution_profile_overrides={'walltime': '01:00:00'}
+    )
+    if result.exit_status != 0:
+        raise RuntimeError(f"DMRG job failed: exit_status={result.exit_status}")
+
+    return load_dmrg(parameters)
+
+
+@materialize('file://')
+async def sample_quantum(parameters: Parameters):
     logger = get_run_logger()
-    logger.info('Estimating ground-state energy via DMRG')
+    context = get_run_context()
 
-    async def dmrg_miyabi():
-        job_block = await MiyabiJobBlock.load(cpujob_block_name)
-        job_block.num_nodes = 1
-        job_block.mpiprocs = 1
-        job_block.walltime = '00:30:00'
+    runtime_config = await QiskitRuntimeConfig.load(parameters.runtime.config_block)
+    # QiskitRuntimeConfig.get_backend() currently does not support use_fractional_gates option, so
+    # we go through the service
+    service = runtime_config.get_service()
+    backend = service.backend(runtime_config.backend_name, use_fractional_gates=True)
+    layout, circuits = get_trotter_circuits(parameters, backend.target, logger=logger)
+    if not parameters.circuit.layout:
+        parameters.circuit.layout = layout
+        with open(Path(parameters.pkgpath) / 'parameters.json', 'w', encoding='utf-8') as out:
+            out.write(parameters.model_dump_json())
 
-        with job_block.get_executor() as executor:
-            arguments = [
-                SCRIPT_DIR / 'dmrg.py',
-                parameters.pkgpath
-            ]
-            exit_status = await executor.execute_job(
-                arguments=arguments,
-                **job_block.get_job_variables()
-            )
-        if exit_status != 0:
-            raise RuntimeError('PBS job dmrg.py failed')
+    try:
+        with open(Path(context.result_store.result_storage.basepath) / context.task.name) as src:
+            task_map = json.read(src)
+    except FileNotFoundError:
+        task_map = {}
 
-    def dmrg_fn():
-        with ThreadPoolExecutor(1) as executor:
-            executor.submit(lambda: asyncio.run(dmrg_miyabi())).result()
-        return load_dmrg(parameters)
-
-    return dmrg_flow(parameters, dmrg_fn, logger)
+    circuits = filter_out_completed(parameters, circuits, task_map, service, logger=logger)
+    task_map |= run_sampler(parameters, circuits, backend, logger=logger)
+    
+    return task_map
 
 
-@task
-async def sample_quantum(
-    parameters: Parameters,
-    runtime_name: str = 'ibm-runner'
-):
-    """Run the circuits on a backend and return the sampler results.
+@materialize('file://', asset_deps=[])
+async def preprocess(parameters: Parameters):
+    result = await run_job_from_blocks(
+        command_block_name='python',
+        execution_profile_block_name='python-cpu-single',
+        hpc_profile_block_name=parameters.hpc_profile,
+        work_dir=Path(parameters.pkgpath) / 'work',
+        user_args=[str(Path(__file__).parents[0] / 'preprocess.py'), parameters.pkgpath],
+        execution_profile_overrides={'walltime': '00:30:00'}
+    )
+    if result.exit_status != 0:
+        raise RuntimeError(f"Preprocess job failed: exit_status={result.exit_status}")
 
-    Args:
-        parameters: Workflow parameters.
-        runner_name: Name of QuantumRunner block.
-        option_name: Name of the Variable storing sampler primitive options.
-    """
+    return result.exit_status
+
+
+@materialize('file://', asset_deps=[])
+async def train_generators(parameters: Parameters):
+    exit_statuses = {}
+    for idt in range(len(parameters.circuit.dts)):
+        for step in parameters.circuit.sampled_steps:
+            exit_status = await train_single_generator.with_options(
+                assets=[(Path(parameters.pkgpath) / f'crbm/dt{idt}_k{step}.h5').as_uri()],
+                asset_deps=[(Path(parameters.pkgpath) / f'data/reco/dt{idt}_k{step}.h5').as_uri()],
+                name=f'train_single_generator_dt{idt}_k{step}'
+            )(parameters, idt, step)
+            exit_statuses[(idt, step)] = exit_status
+
+    if any(s != 0 for s in exit_statuses.values()):
+        raise RuntimeError(f"Train generators job failed: exit_statuses={exit_statuses}")
+
+    return 0
+
+
+@materialize('file://', asset_deps=[])
+async def train_single_generator(parameters: Parameters, idt: int, step: int):
+    result = await run_job_from_blocks(
+        command_block_name='python',
+        execution_profile_block_name='python-gpu-single',
+        hpc_profile_block_name=parameters.hpc_profile,
+        work_dir=Path(parameters.pkgpath) / 'work',
+        user_args=[
+            str(Path(__file__).parents[0] / 'train_generator.py'),
+            parameters.pkgpath,
+            '--idt', f'{idt}',
+            '--step', f'{step}'
+        ],
+        execution_profile_overrides={'walltime': '02:00:00'}
+    )
+    if result.exit_status != 0:
+        raise RuntimeError(f"Train generator ({idt}, {step}) job failed:"
+                           f" exit_status={result.exit_status}")
+
+    return result.exit_status
+
+
+@materialize('file://', asset_deps=[])
+async def diagonalize(parameters: Parameters):
     logger = get_run_logger()
-    logger.info('Sampling Trotter circuit final state bitstrings')
-
-    runtime = await QuantumRuntime.load(runtime_name)
-    if parameters.runtime.backend is not None:
-        runtime.resource_name = parameters.runtime.backend
-    if parameters.runtime.instance is not None:
-        runtime.credentials.crn = parameters.runtime.instance
-
-    def fetch_result_fn():
-        def fn():
-            job = PrimitiveJobRun(job_id=parameters.runtime.job_id, credentials=runtime.credentials)
-            return asyncio.run(job.fetch_result())
-
-        with ThreadPoolExecutor(1) as executor:
-            return executor.submit(fn).result()
-
-    # Cannot call runtime.get_target and runtime.sampler directly because of async_dispatch
-    # (the functions would be called in a thread running an event loop and will therefore return
-    # coroutines)
-    def sample_quantum_fn():
-        with ThreadPoolExecutor(1) as executor:
-            target = executor.submit(lambda: runtime.get_target()).result()
-
-        layout, exp_circuits, ref_circuits = get_trotter_circuits(parameters, target, logger)
-        # Run primitive
-        logger.info('Submitting a runtime job')
-        pubs = compile_pubs(parameters, exp_circuits, ref_circuits)
-
-        if parameters.runtime.options is not None:
-            options = Variable.get(parameters.runtime.options)
-
-        with ThreadPoolExecutor(1) as executor:
-            pub_result = executor.submit(
-                lambda: runtime.sampler(sampler_pubs=pubs, options=options)
-            ).result()
-
-        prefect_client = get_client(sync_client=True)
-        artifacts = prefect_client.read_artifacts(
-            limit=1,
-            artifact_filter=ArtifactFilter(
-                key=ArtifactFilterKey(any_=['job-metrics']),
-                task_run_id=ArtifactFilterTaskRunId(any_=[task_run.id])
-            )
-        )
-        if artifacts:
-            keys, values = json.loads(artifacts[0].data)
-            job_id = values[keys.index('job_id')]
-        else:
-            job_id = ''
-
-        return layout, pub_result, job_id
-
-    sample_quantum_flow(parameters, fetch_result_fn, sample_quantum_fn, logger)
-
-
-@task
-async def preprocess(
-    parameters: Parameters,
-    cpujob_block_name: str
-):
-    """Correct the link-state bitstrings with MWPM and convert to plaquette-state bitstrings.
-
-    Args:
-        parameters: Configuration parameters.
-        cpujob_block_name: Name of the MiyabiJobBlock that executes a python script.
-    """
-    logger = get_run_logger()
-    logger.info('Correcting and converting link states to plaquette states')
-
-    async def convert_miyabi(task_specs):
-        job_block = await MiyabiJobBlock.load(cpujob_block_name)
-        job_block.num_nodes = len(task_specs)
-        job_block.mpiprocs = 1
-        job_block.walltime = '00:10:00'
-
-        with job_block.get_executor() as executor:
-            arguments = [
-                SCRIPT_DIR / 'preprocess.py',
-                parameters.pkgpath,
-                '--mpi',
-                '--etype', ','.join(task[0] for task in task_specs),
-                '--idt', ','.join(str(task[1]) for task in task_specs),
-                '--step', ','.join(str(task[2]) for task in task_specs)
-            ]
-            exit_status = await executor.execute_job(
-                arguments=arguments,
-                **job_block.get_job_variables()
-            )
-        if exit_status != 0:
-            raise RuntimeError('PBS job preprocess.py failed')
-
-    def convert_fn(task_specs):
-        with ThreadPoolExecutor(1) as executor:
-            executor.submit(lambda: asyncio.run(convert_miyabi(task_specs))).result()
-
-    preprocess_flow(parameters, convert_fn, logger=logger)
-
-
-@task
-async def train_generator(
-    parameters: Parameters,
-    cudajob_block_name: str
-):
-    """Train a CRBM per Trotter step.
-
-    Args:
-        parameters: Configuration parameters.
-        cudajob_block_name: Name of the MiyabiJobBlock that executes the python interpreter in a
-            CUDA environment.
-        pkgpath: Name of the HDF5 file where intermediate and final output of the workflow
-            are written.
-    """
-    logger = get_run_logger()
-    logger.info('Training conditional restricted Boltzmann machines')
-
-    async def run_train_job(task_specs):
-        job_block = await MiyabiJobBlock.load(cudajob_block_name)
-        job_block.mpiprocs = 1
-        job_block.num_nodes = 1
-        job_block.walltime = '01:00:00'
-
-        async def submit(idt, step):
-            with job_block.get_executor() as executor:
-                arguments = [
-                    SCRIPT_DIR / 'train_generator.py',
-                    parameters.pkgpath,
-                    '--idt', f'{idt}',
-                    '--step', f'{step}'
-                ]
-                return await executor.execute_job(
-                    arguments=arguments,
-                    **job_block.get_job_variables()
-                )
-
-        tasks = []
-        async with asyncio.TaskGroup() as tg:
-            for idt, step in task_specs:
-                tasks.append(tg.create_task(submit(idt, step)))
-
-        if any(task.result() != 0 for task in tasks):
-            raise RuntimeError('PBS job train_generator.py failed')
-
-    def train_fn(task_specs):
-        with ThreadPoolExecutor(1) as executor:
-            return executor.submit(lambda: asyncio.run(run_train_job(task_specs))).result()
-
-    train_generator_flow(parameters, train_fn, logger=logger)
-
-
-@task
-async def diagonalize(
-    parameters: Parameters,
-    mode: str,
-    cudajob_block_name: str
-) -> float:
-    """Perform SQD with iterative configuration recovery.
-
-    Args:
-        parameters: Configuration parameters.
-        mode: 'cr' or 'rn'.
-        cudajob_block_name: Name of the MiyabiJobBlock that executes the python interpreter in a
-            CUDA environment.
-    """
-    logger = get_run_logger()
-    logger.info('Performing subspace diagonalization with mode %s', mode)
-
+    
     # Determine the required number of nodes
     gen_size = (len(parameters.circuit.dts) * len(parameters.circuit.sampled_steps)
                 * parameters.runtime.shots_exp * parameters.skqd.num_gen)
     num_p = make_lattice(parameters).num_active_plaquettes
     pt_core_size = sum(math.comb(num_p, i) for i in range(parameters.skqd.pt_core_max + 1))
     xcache_size_gib = 4 * (gen_size + pt_core_size) * (num_p + 1) / (2 ** 30)
-    num_nodes = 2 ** int(math.ceil(math.log2(math.ceil(xcache_size_gib / 120. * 4))))
+    gpu_memory_gib = Variable.get(parameters.hpc_profile)['gpu_memory_gib']
+    num_nodes = 2 ** int(math.ceil(math.log2(math.ceil(xcache_size_gib / gpu_memory_gib * 4))))
 
-    async def run_diagonalize_job():
-        job_block = await MiyabiJobBlock.load(cudajob_block_name)
-        job_block.mpiprocs = 1
-        job_block.num_nodes = num_nodes
-        job_block.walltime = '24:00:00'
+    result = await run_job_from_blocks(
+        command_block_name='python',
+        execution_profile_block_name='python-gpu-mpi',
+        hpc_profile_block_name=parameters.hpc_profile,
+        work_dir=Path(parameters.pkgpath) / 'work',
+        user_args=[
+            str(Path(__file__).parents[0] / 'diagonalize.py'),
+            parameters.pkgpath,
+            'cr'
+        ],
+        execution_profile_overrides={'walltime': '08:00:00', 'num_nodes': num_nodes}
+    )
+    if result.exit_status != 0:
+        raise RuntimeError(f"Diagonalize job failed:"
+                            f" exit_status={result.exit_status}")
 
-        with job_block.get_executor() as executor:
-            arguments = [
-                SCRIPT_DIR / 'diagonalize.py',
-                parameters.pkgpath,
-                mode,
-                '--mpi'
-            ]
-            exit_status = await executor.execute_job(
-                arguments=arguments,
-                **job_block.get_job_variables()
-            )
-        if exit_status != 0:
-            raise RuntimeError(f'PBS job diagonalize.py {mode} failed')
-
-    def diagonalize_fn():
-        with ThreadPoolExecutor(1) as executor:
-            executor.submit(lambda: asyncio.run(run_diagonalize_job())).result()
-        return float(load_skqd_result(parameters, mode)[0][-1])
-
-    return diagonalize_flow(parameters, mode, diagonalize_fn, logger=logger)
+    return load_skqd_result(parameters, 'cr')[0][-1]
 
 
 def deploy():
@@ -357,4 +272,11 @@ if __name__ == '__main__':
     else:
         parameters = open_from_yaml(options.parameters, overwrite=options.overwrite)
 
-    asyncio.run(skqd_z2lgt(parameters))
+    block_name = hashlib.md5(parameters.pkgpath.encode('utf-8')).hexdigest()
+    try:
+        storage = LocalFileSystem.load(block_name)
+    except ValueError:
+        storage = LocalFileSystem(basepath=str(Path(parameters.pkgpath) / 'results'))
+        storage.save(block_name)
+
+    asyncio.run(skqd_z2lgt.with_options(result_storage=storage)(parameters))

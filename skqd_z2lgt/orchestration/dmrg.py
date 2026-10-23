@@ -27,3 +27,17 @@ def run_dmrg_and_sampling(parameters: Parameters, logger: Optional[logging.Logge
     # return energy, states, probs
     save_dmrg(parameters, energy)
     return energy
+
+
+if __name__ == '__main__':
+    import sys
+    import argparse
+    from skqd_z2lgt.orchestration.open_output import open_output
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('pkgpath')
+    parser.add_argument('--log-level', default='INFO')
+    options = parser.parse_args()
+
+    logging.basicConfig(level=getattr(logging, options.log_level.upper()), stream=sys.stdout)
+    run_dmrg_and_sampling(open_output(options.pkgpath), logging.getLogger('dmrg'))

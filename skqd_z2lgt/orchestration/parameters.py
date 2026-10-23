@@ -114,6 +114,10 @@ class CircuitParameters(BaseModel):
 class RuntimeParameters(BaseModel):
     """Configuration for runtime sampler."""
 
+    config_block: str = Field(
+        description='Name of the QiskitRuntimeConfig block name.',
+        title='QiskitRuntimeConfig block'
+    )
     job_id: str | None = Field(
         default=None,
         description='ID of an existing IBM Quantum workload.',
@@ -267,4 +271,9 @@ class Parameters(BaseModel):
         default=None,
         description='Path of the directory tree where intermediate and final output are stored.',
         title='Output package name'
+    )
+
+    hpc_profile: str = Field(
+        description='Name of the HPC Profile block.',
+        title='HPC Profile block name'
     )
