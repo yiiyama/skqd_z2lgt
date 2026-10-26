@@ -1,5 +1,5 @@
 """Workflow parameters."""
-from typing import Any, Optional
+from typing import Optional
 from pydantic import BaseModel, Field, field_validator
 
 
@@ -247,8 +247,7 @@ class Parameters(BaseModel):
         title='SKQD',
     )
 
-    pkgpath: str | None = Field(
-        default=None,
+    pkgpath: str = Field(
         description='Path of the directory tree where intermediate and final output are stored.',
         title='Output package name'
     )
