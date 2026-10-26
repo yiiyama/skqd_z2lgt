@@ -32,11 +32,6 @@ async def skqd_z2lgt(parameters: Parameters) -> float:
     logger = get_run_logger()
     logger.setLevel(logging.INFO)
 
-    tmpdir = None
-    if not parameters.pkgpath:
-        tmpdir = tempfile.TemporaryDirectory()
-        parameters.pkgpath = tmpdir.name
-
     open_output(parameters, logger)
     suffices = [f'dt{idt}_k{step}'
                 for idt in range(len(parameters.circuit.dts))
@@ -80,9 +75,6 @@ async def skqd_z2lgt(parameters: Parameters) -> float:
         cache_policy=cache_policy
     )(parameters)
 
-    if tmpdir:
-        tmpdir.cleanup()
-
     if parameters.dmrg:
         dmrg_energy = dmrg_future.result()
         logger.info('DMRG energy: %f', dmrg_energy)
@@ -111,9 +103,9 @@ async def dmrg(parameters: Parameters):
         command_block_name=parameters.python_cmd,
         execution_profile_block_name=parameters.python_cpu_single_exec_profile,
         hpc_profile_block_name=parameters.hpc_profile,
-        work_dir=Path(parameters.pkgpath) / 'work',
+        work_dir=Path(parameters.pkgpath) / 'work/dmrg',
         user_args=[str(Path(__file__).parents[0] / 'dmrg.py'), parameters.pkgpath],
-        script_filename='dmrg',
+        script_filename='run',
         execution_profile_overrides={'walltime': '01:00:00'}
     )
     if result.exit_status != 0:
@@ -156,9 +148,9 @@ async def preprocess(parameters: Parameters):
         command_block_name=parameters.python_cmd,
         execution_profile_block_name=parameters.python_cpu_single_exec_profile,
         hpc_profile_block_name=parameters.hpc_profile,
-        work_dir=Path(parameters.pkgpath) / 'work',
+        work_dir=Path(parameters.pkgpath) / 'work/preprocess',
         user_args=[str(Path(__file__).parents[0] / 'preprocess.py'), parameters.pkgpath],
-        script_filename='preprocess',
+        script_filename='run',
         execution_profile_overrides={'walltime': '00:30:00'}
     )
     if result.exit_status != 0:
@@ -209,14 +201,14 @@ async def train_single_generator(parameters: Parameters, idt: int, step: int, ad
         command_block_name=parameters.python_cuda_cmd,
         execution_profile_block_name=parameters.python_gpu_single_exec_profile,
         hpc_profile_block_name=parameters.hpc_profile,
-        work_dir=Path(parameters.pkgpath) / 'work',
+        work_dir=Path(parameters.pkgpath) / 'work' / get_run_context().task.name,
         user_args=[
             str(Path(__file__).parents[0] / 'train_generator.py'),
             parameters.pkgpath,
             '--idt', f'{idt}',
             '--step', f'{step}'
         ] + add_args,
-        script_filename=get_run_context().task.name,
+        script_filename='run',
         execution_profile_overrides={'walltime': '02:00:00'}
     )
     if result.exit_status != 0:
@@ -243,13 +235,13 @@ async def diagonalize(parameters: Parameters):
         command_block_name=parameters.python_cuda_cmd,
         execution_profile_block_name=parameters.python_gpu_mpi_exec_profile,
         hpc_profile_block_name=parameters.hpc_profile,
-        work_dir=Path(parameters.pkgpath) / 'work',
+        work_dir=Path(parameters.pkgpath) / 'work/diagonalize',
         user_args=[
             str(Path(__file__).parents[0] / 'diagonalize.py'),
             parameters.pkgpath,
             'cr'
         ],
-        script_filename='diagonalize',
+        script_filename='run',
         execution_profile_overrides={'walltime': '08:00:00', 'num_nodes': num_nodes}
     )
     if result.exit_status != 0:
