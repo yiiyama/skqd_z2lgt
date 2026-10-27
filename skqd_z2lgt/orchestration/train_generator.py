@@ -1,5 +1,6 @@
 """Train the CRBM for configuration recovery."""
 import os
+from collections.abc import Callable
 from functools import partial
 import logging
 from pathlib import Path
@@ -14,8 +15,9 @@ from skqd_z2lgt.recovery.crbm import ConditionalRBM
 from skqd_z2lgt.recovery.loss import cd_meanloss
 from skqd_z2lgt.recovery.train import train_crbm
 from skqd_z2lgt.recovery.metric import success_rate
-from skqd_z2lgt.orchestration.parameters import Parameters
+from skqd_z2lgt.orchestration.parameters import Parameters, CRBMParameters
 from skqd_z2lgt.orchestration.io import load_reco
+from skqd_z2lgt.orchestration.common import make_lattice
 
 
 def save_model(
@@ -64,12 +66,36 @@ def load_model(
     return model
 
 
+def new_model(
+    parameters: Parameters
+) -> ConditionalRBM:
+    lattice = make_lattice(parameters)
+    num_v = lattice.num_active_plaquettes
+    num_u = lattice.num_vertices + lattice.num_plaquettes - lattice.num_active_plaquettes
+    rngs = nnx.Rngs(params=parameters.crbm.seed_params, sample=parameters.crbm.seed_sample)
+    return ConditionalRBM(num_u, num_v, parameters.crbm.num_h, rngs=rngs)
+
+
+def best_model_cond(iepoch, records):
+    sr = records['test_success_rate']
+    n_epochs = sr.shape[0]
+    return jnp.all(jnp.logical_or(sr < sr[iepoch], jnp.arange(n_epochs) >= iepoch))
+
+
+def make_convergence_cond(window: int) -> Callable:
+    def convergence_cond(iepoch, records):
+        sr = records['test_success_rate']
+        i_best = jnp.argmax(jnp.where(jnp.arange(sr.shape[0]) < iepoch, sr, 0.))
+        return iepoch > i_best + window
+
+    return convergence_cond
+
+
 def train_single_model(
     parameters: Parameters,
     idt: int,
     step: int,
-    seed_params: int = 1234,
-    seed_sample: int = 5678,
+    profile: Optional[str] = None,
     logger: Optional[logging.Logger] = None
 ):
     """Train a single CRBM model."""
@@ -79,30 +105,24 @@ def train_single_model(
     cparams = parameters.crbm
 
     data = load_reco(parameters, etype='ref', idt=idt, step=step)
-    rngs = nnx.Rngs(params=seed_params, sample=seed_sample)
-    model = ConditionalRBM(data[0].shape[-1], data[1].shape[-1], cparams.num_h, rngs=rngs)
+    model = new_model(parameters)
     loss_fn_train = partial(cd_meanloss, impl='sum', unroll=20)
     loss_fn_test = partial(cd_meanloss, impl='tensordot', unroll=50)
     metrics_test = {'success_rate': (nnx.metrics.Average, success_rate(parameters.skqd.num_gen))}
 
-    def best_model_cond(iepoch, records):
-        sr = records['test_success_rate']
-        n_epochs = sr.shape[0]
-        return jnp.all(jnp.logical_or(sr < sr[iepoch], jnp.arange(n_epochs) >= iepoch))
-
-    def convergence(iepoch, records):
-        sr = records['test_success_rate']
-        i_best = jnp.argmax(sr)
-        return iepoch > i_best + 20
-
     optax_fn = optax.adamw(learning_rate=cparams.learning_rate, weight_decay=cparams.weight_decay)
+    convergence_cond = make_convergence_cond(cparams.convergence_window)
 
+    if profile:
+        jax.profiler.start_trace(profile)
     best_model, records = train_crbm(model, data, batch_size=cparams.train_batch_size,
                                      num_epochs=cparams.num_epochs, loss_fn_train=loss_fn_train,
                                      loss_fn_test=loss_fn_test, optax_fn=optax_fn,
                                      metrics_test=metrics_test, best_model_cond=best_model_cond,
-                                     convergence=convergence,
+                                     convergence_cond=convergence_cond,
                                      train_eval_unit=cparams.train_eval_unit)
+    if profile:
+        jax.profiler.stop_trace()
 
     save_model(parameters, best_model, records, idt, step, logger=logger)
 
@@ -121,6 +141,7 @@ if __name__ == '__main__':
     parser.add_argument('--idt')
     parser.add_argument('--step')
     parser.add_argument('--gpu')
+    parser.add_argument('--profile')
     parser.add_argument('--log-level', default='INFO')
     args = parser.parse_args()
 
@@ -160,12 +181,12 @@ if __name__ == '__main__':
         ndev = len(args.gpu.split(','))
         futures = []
         with ThreadPoolExecutor(max_workers=ndev) as executor:
-            for itask, task_spec in enumerate(task_specs):
+            for itask, (idt, step) in enumerate(task_specs):
                 idev = itask % ndev
-                futures.append(executor.submit(train_in_thread, idev, *task_spec))
+                futures.append(executor.submit(train_in_thread, idev, idt, step))
         for future in futures:
             future.result()
 
     else:
-        for task_spec in task_specs:
-            train_single_model(parameters, *task_spec)
+        for idt, step in task_specs:
+            train_single_model(parameters, idt, step, profile=args.profile)
