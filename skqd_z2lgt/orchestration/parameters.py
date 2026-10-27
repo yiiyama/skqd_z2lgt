@@ -158,13 +158,13 @@ class CRBMParameters(BaseModel):
         ge=1
     )
     learning_rate: float = Field(
-        default=0.01,
+        default=0.002,
         description='Learning rate for the Adam optimizer with weight decay',
         title='Learning Rate',
         gt=0.
     )
     weight_decay: float = Field(
-        default=0.1,
+        default=0.02,
         description='Weight decay coefficient (to be multiplied with LR) of adamw',
         title='Weight decay',
         gt=0.
@@ -175,13 +175,31 @@ class CRBMParameters(BaseModel):
         title='Maximum Epochs',
         ge=1
     )
+    convergence_window: int = Field(
+        default=30,
+        description='Number of epochs to keep training after achieving the best success rate.',
+        title='Training convergence window',
+        ge=1
+    )
+    seed_params: int = Field(
+        default=1234,
+        description='Random seed for CRBM weights initialization.',
+        title='CRBM weights seed',
+        ge=0
+    )
+    seed_sample: int = Field(
+        default=5678,
+        description='Random seed for CRBM sample generation.',
+        title='CRBM sampling seed',
+        ge=0
+    )
 
 
 class SKQDParameters(BaseModel):
     """Configuration for SKQD algorithm execution."""
 
     num_gen: int = Field(
-        default=10,
+        default=100,
         description="Number of bitstrings per sample to generate for the initial iteration of "
                     "configuration recovery.",
         title="Generated Samples",
@@ -193,8 +211,14 @@ class SKQDParameters(BaseModel):
         title="Perturbative Core Excitations",
         ge=0
     )
+    carryover: int = Field(
+        default=4_000_000,
+        description="Number of most relevant bitstrings beyond the PT core to retain across" \
+        " iterations.",
+        ge=0
+    )
     max_iterations: int = Field(
-        default=10,
+        default=100,
         description="Number of configuration recovery iterations.",
         title="Max Iteration",
         ge=0
