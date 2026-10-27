@@ -227,22 +227,31 @@ async def diagonalize(parameters: Parameters):
                 * parameters.runtime.shots_exp * parameters.skqd.num_gen)
     num_p = make_lattice(parameters).num_active_plaquettes
     pt_core_size = sum(math.comb(num_p, i) for i in range(parameters.skqd.pt_core_max + 1))
-    xcache_size_gib = 4 * (gen_size + pt_core_size) * (num_p + 1) / (2 ** 30)
-    gpu_memory_gib = (await Variable.get(parameters.hpc_profile)).get('gpu_memory_gib', 80)
-    num_nodes = 2 ** int(math.ceil(math.log2(math.ceil(xcache_size_gib / gpu_memory_gib * 4))))
+    # 4 bytes per index, gen+carryover+pt_core indices per X signature, num_p + 1 X signatures
+    xcache_size = 4 * (gen_size + parameters.skqd.carryover + pt_core_size) * (num_p + 1)
+    gpu_memory = (await Variable.get(parameters.hpc_profile)).get('gpu_memory_gib', 80) *  (2 ** 30)
+    # X cache is the largest memory chunk but there are some more arrays.
+    # Give a safety margin of factor 2.
+    num_nodes = 2 ** int(math.ceil(math.log2(math.ceil(xcache_size / gpu_memory * 2))))
+
+    user_args = [
+        str(Path(__file__).parents[0] / 'diagonalize.py'),
+        parameters.pkgpath,
+        'cr'
+    ]
+    walltime = '02:00:00'
+    if num_nodes > 1:
+        user_args += ['--mpi']
+        walltime = '08:00:00'
 
     result = await run_job_from_blocks(
         command_block_name=parameters.python_cuda_cmd,
         execution_profile_block_name=parameters.python_gpu_mpi_exec_profile,
         hpc_profile_block_name=parameters.hpc_profile,
         work_dir=Path(parameters.pkgpath) / 'work/diagonalize',
-        user_args=[
-            str(Path(__file__).parents[0] / 'diagonalize.py'),
-            parameters.pkgpath,
-            'cr'
-        ],
+        user_args=user_args,
         script_filename='run',
-        execution_profile_overrides={'walltime': '08:00:00', 'num_nodes': num_nodes}
+        execution_profile_overrides={'walltime': walltime, 'num_nodes': num_nodes}
     )
     if result.exit_status != 0:
         raise RuntimeError(f"Diagonalize job failed:"

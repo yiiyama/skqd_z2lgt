@@ -77,52 +77,41 @@ def _generate_recovery(generators, syndrome_data, plaq_data, num_gen):
     return jnp.packbits(gen_states, axis=1)
 
 
-@nnx.jit(static_argnames=['num_gen', 'return_states'])
-def recover_and_diagonalize(
+@nnx.jit(static_argnames=['return_best'])
+def compose_and_diagonalize(
     hamiltonian: PauliSumXZ,
-    generators: nnx.Module,
-    syndrome_data: NDArray,
-    plaq_data: NDArray,
-    num_gen: int,
-    pt_core: Optional[NDArray] = None,
-    selected_states: Optional[NDArray] = None,
-    return_states: bool = False
+    gen_states: NDArray,
+    pt_core: NDArray,
+    carryover: NDArray,
+    return_best: int = 0
 ):
-    states_p = _generate_recovery(generators, syndrome_data, plaq_data, num_gen)
-    states_list = [states_p]
-    if pt_core is not None:
-        states_list.append(pt_core)
-    if selected_states is not None:
-        states_list.append(selected_states)
+    states_list = [gen_states, pt_core, carryover]
     if (not (mesh := get_abstract_mesh()).empty
             and (resid := sum(arr.shape[0] for arr in states_list) % mesh.size) != 0):
-        states_list.append(jnp.zeros((resid, states_p.shape[-1]), dtype=np.uint8))
-
-    if len(states_list) > 1:
-        states_p = jnp.concatenate(states_list, axis=0)
+        states_list.append(jnp.zeros((resid, gen_states.shape[-1]), dtype=np.uint8))
+    states_p = jnp.concatenate(states_list, axis=0)
     eigval, eigvec, states_u, subspace_dim = run_sqd(hamiltonian, states_p, states_p.shape[0], True)
-    result = (eigval, subspace_dim)
-    if return_states:
-        sort_idx = jnp.argsort(jnp.square(eigvec), descending=True, dtype=np.int32)
-        sort_idx = jnp.where(sort_idx < subspace_dim, sort_idx, -1)
-        sorted_states = states_u.at[sort_idx].get(mode='fill', fill_value=0,
-                                                  wrap_negative_indices=False)
-        pt_max = jnp.max(jnp.sum(jnp.bitwise_count(pt_core), axis=1))
-        selection = jnp.sum(jnp.bitwise_count(sorted_states), axis=1) > pt_max
-        select_idx = jnp.cumsum(
-            jnp.bincount(
-                jnp.cumsum(selection, dtype=np.int32),
-                length=np.prod(plaq_data.shape[:-1])
-            ),
-            dtype=np.int32
-        )
-        states = sorted_states[select_idx]
-        result += (states,)
+    if return_best == 0:
+        return eigval, subspace_dim
 
-    return result
+    sort_idx = jnp.argsort(jnp.square(eigvec), descending=True, dtype=np.int32)
+    sort_idx = jnp.where(sort_idx < subspace_dim, sort_idx, -1)
+    sorted_states = states_u.at[sort_idx].get(mode='fill', fill_value=0,
+                                              wrap_negative_indices=False)
+    pt_max = jnp.max(jnp.sum(jnp.bitwise_count(pt_core), axis=1))
+    selection = jnp.sum(jnp.bitwise_count(sorted_states), axis=1) > pt_max
+    select_idx = jnp.cumsum(
+        jnp.bincount(
+            jnp.cumsum(selection, dtype=np.int32),
+            length=return_best
+        ),
+        dtype=np.int32
+    )
+    states = sorted_states[select_idx]
+    return eigval, subspace_dim, states
 
 
-@nnx.jit(static_argnames=['num_gen', 'num_iter', 'log_level'])
+@nnx.jit(static_argnames=['num_gen', 'carryover_size', 'num_iter', 'log_level'])
 def iterative_sqd(
     hamiltonian: PauliSumXZ,
     generators: nnx.Module,
@@ -130,6 +119,7 @@ def iterative_sqd(
     plaq_data: NDArray,
     num_gen: int,
     pt_core: NDArray,
+    carryover_size: int,
     num_iter: int,
     tol: float,
     log_level: int = logging.INFO
@@ -143,30 +133,30 @@ def iterative_sqd(
         )
         return jnp.logical_and(iteration < num_iter, not_converged)
 
-    def run_and_record(iteration, _history, _generators, _selected_states, return_states):
-        result = recover_and_diagonalize(hamiltonian, _generators, syndrome_data, plaq_data,
-                                         num_gen, pt_core=pt_core, selected_states=_selected_states,
-                                         return_states=return_states)
-
+    def run_and_record(_iteration, _history, _carryover, _generators, return_states=True):
+        gen_states = _generate_recovery(_generators, syndrome_data, plaq_data, num_gen)
+        result = compose_and_diagonalize(hamiltonian, gen_states, pt_core, _carryover,
+                                         return_best=_carryover.shape[0] if return_states else 0)
+        eigval, subspace_dim = result[:2]
         if log_level <= logging.INFO:
-            jax.debug.print('Iteration {}: energy {}', iteration, result[0])
-        _history = (_history[0].at[iteration].set(result[0]),
-                    _history[1].at[iteration].set(result[1]))
-        return _history, result
+            jax.debug.print('Iteration {}: energy {}', _iteration, eigval)
+        _history = (_history[0].at[_iteration].set(eigval),
+                    _history[1].at[_iteration].set(subspace_dim))
+        if return_states:
+            return _history, result[2]
+        return _history
         
     def body_fn(val):
-        iteration, _history, _generators, _selected_states = val
-        _history, result = run_and_record(iteration, _history, _generators, _selected_states, True)
-        return (iteration + 1, _history, _generators, result[2])
+        _iteration, _history, _carryover, _generators = val
+        _history, _carryover = run_and_record(_iteration, _history, _carryover, _generators)
+        return (_iteration + 1, _history, _carryover, _generators)
 
     init = (
         0,
         (jnp.empty(num_iter + 1, dtype=np.float64), jnp.empty(num_iter + 1, dtype=np.int32)),
-        generators,
-        jnp.zeros((np.prod(plaq_data.shape[:-1]), pt_core.shape[-1]), dtype=np.uint8)
+        jnp.zeros((carryover_size, pt_core.shape[-1]), dtype=np.uint8),
+        generators
     )
-    result = nnx.while_loop(cond_fn, body_fn, init)
-    history = result[1]
-    selected_states = result[3]
+    iteration, history, selected_states = nnx.while_loop(cond_fn, body_fn, init)[:3]
 
-    return run_and_record(num_iter, history, generators, selected_states, False)[0]
+    return run_and_record(iteration, history, selected_states, generators, return_states=False)
