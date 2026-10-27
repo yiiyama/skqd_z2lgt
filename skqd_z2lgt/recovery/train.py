@@ -64,7 +64,15 @@ def make_test_fn(loss_fn, metric_fns):
     return compute_test_metrics
 
 
-def make_train_loop(train_epoch, compute_test_metrics, best_cond, convergence, n_epochs, tr_shape):
+def make_train_loop(
+    train_epoch: Callable,
+    compute_test_metrics: Callable,
+    best_cond: Callable,
+    convergence_cond: Callable,
+    n_epochs: int,
+    tr_shape: tuple[int, int, int]
+):
+    """Compose the training loop from the single-epoch and conditions callables."""
     def loop_body(val):
         iepoch, best_model = val[:2]
         records, model, optimizer, metrics_train, metrics_test, data, data_test, rngs = val[2:]
@@ -103,7 +111,7 @@ def make_train_loop(train_epoch, compute_test_metrics, best_cond, convergence, n
         records |= {f'test_{name}': jnp.empty(n_epochs)
                     for name in ('loss',) + metrics_test._metric_names}
         return jax.lax.while_loop(
-            lambda val: (val[0] < n_epochs) & ~convergence(val[0], val[2]),
+            lambda val: (val[0] < n_epochs) & ~convergence_cond(val[0], val[2]),
             loop_body,
             (0, model, records, model, optimizer, metrics_train, metrics_test, data, data_test, rngs)
         )[:3]
@@ -123,16 +131,17 @@ def train_crbm(
     metrics_train: Optional[dict[str, tuple]] = None,
     metrics_test: Optional[dict[str, tuple]] = None,
     best_model_cond: Optional[Callable[[int, dict[str, np.ndarray]], bool]] = None,
-    convergence: Optional[Callable[[int, dict[str, np.ndarray]], bool]] = None,
+    convergence_cond: Optional[Callable[[int, dict[str, np.ndarray]], bool]] = None,
     train_eval_unit: int = 100,
     test_batch_size: int = 1000,
     seed: int = 0
-):
+) -> tuple[ConditionalRBM, dict[str, np.ndarray]]:
+    """Train a CRBM."""
     loss_fn_train = loss_fn_train or cd_meanloss
     loss_fn_test = loss_fn_test or loss_fn_train
     grad_fn = nnx.value_and_grad(loss_fn_train)
     best_model_cond = best_model_cond or (lambda i, r: True)
-    convergence = convergence or (lambda i, r: False)
+    convergence_cond = convergence_cond or (lambda i, r: False)
 
     metrics_train = metrics_train or {}
     metric_fns_train = {name: fn for name, (_, fn) in metrics_train.items()}
@@ -185,7 +194,7 @@ def train_crbm(
         make_train_fn(grad_fn, metric_fns_train),
         make_test_fn(loss_fn_test, metric_fns_test),
         best_model_cond,
-        convergence,
+        convergence_cond,
         num_epochs,
         train_shape
     )
