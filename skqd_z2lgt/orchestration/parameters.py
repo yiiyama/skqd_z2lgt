@@ -304,7 +304,7 @@ class Parameters(BaseModel):
     python_gpu_mpi_exec_profile: str = Field(
         default='python-gpu-mpi',
         description='Name of the Execution profile block for GPU-bound single-node Python job.',
-        title='Python GPU-bound single-node execution profile'
+        title='Python GPU-bound multi-node execution profile'
     )
 
     hpc_profile: str = Field(
