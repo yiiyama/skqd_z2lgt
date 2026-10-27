@@ -163,10 +163,7 @@ async def preprocess(parameters: Parameters):
 async def train_generators(parameters: Parameters):
     logger = get_run_logger()
 
-    gpus = None
-    hpc_profile = await HPCProfileBlock.load(parameters.hpc_profile)
-    if hpc_profile.hpc_target == 'local':
-        gpus = (await Variable.get(parameters.hpc_profile)).get('gpus')
+    gpus = (await Variable.get(parameters.hpc_profile)).get('gpus')
 
     futures = {}
     igpu = 0
@@ -244,6 +241,9 @@ async def diagonalize(parameters: Parameters):
         user_args += ['--mpi']
         walltime = '08:00:00'
 
+    if (gpus := (await Variable.get(parameters.hpc_profile)).get('gpus')):
+        user_args += ['--gpus', gpus]
+
     result = await run_job_from_blocks(
         command_block_name=parameters.python_cuda_cmd,
         execution_profile_block_name=parameters.python_gpu_mpi_exec_profile,
@@ -254,8 +254,7 @@ async def diagonalize(parameters: Parameters):
         execution_profile_overrides={'walltime': walltime, 'num_nodes': num_nodes}
     )
     if result.exit_status != 0:
-        raise RuntimeError(f"Diagonalize job failed:"
-                            f" exit_status={result.exit_status}")
+        raise RuntimeError(f"Diagonalize job failed: exit_status={result.exit_status}")
 
     return load_skqd_result(parameters, 'cr')[0][-1]
 
