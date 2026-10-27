@@ -83,6 +83,7 @@ def prepare_rand_generators(parameters: Parameters) -> RandomExcitation:
 def diagonalize_in_mode(
     parameters: Parameters,
     mode: str,  # 'cr' or 'rn'
+    profile: Optional[str] = None,
     logger: Optional[logging.Logger] = None
 ) -> float:
     """Project and diagonalize the Hamiltonian with configuration recovery or random bitflips."""
@@ -106,10 +107,15 @@ def diagonalize_in_mode(
     logger.info('Generating the PT core (<=%d excitations)', parameters.skqd.pt_core_max)
     pt_core = make_pt_core(plaq_data.shape[-1], parameters.skqd.pt_core_max)
     logger.info('Starting SKQD iterations')
+    if profile:
+        jax.profiler.start_trace(profile)
     energies, subspace_dims = iterative_sqd(hamiltonian, generators, syndrome_data, plaq_data,
                                             parameters.skqd.num_gen, pt_core,
+                                            parameters.skqd.carryover,
                                             parameters.skqd.max_iterations,
                                             parameters.skqd.energy_convergence)
+    if profile:
+        jax.profiler.stop_trace()
 
     if jax.process_index() == 0:
         save_skqd_result(parameters, mode, energies, subspace_dims)
@@ -129,6 +135,7 @@ if __name__ == '__main__':
     parser.add_argument('mode')
     parser.add_argument('--mpi', action='store_true')
     parser.add_argument('--gpus', help='CUDA_VISIBLE_DEVICES')
+    parser.add_argument('--profile')
     parser.add_argument('--log-level', default='INFO')
     options = parser.parse_args()
 
@@ -145,4 +152,4 @@ if __name__ == '__main__':
     if (ndev := jax.device_count()) > 1:
         jax.set_mesh(jax.make_mesh((ndev,), ('x',), (AxisType.Explicit,)))
 
-    diagonalize_in_mode(open_output(options.pkgpath), options.mode)
+    diagonalize_in_mode(open_output(options.pkgpath), options.mode, profile=options.profile)
