@@ -162,3 +162,9 @@ Important outputs in ``pkgpath`` are
 - ``crbm/*.h5``: Contains the CRBM weights and train / test metrics
 
 To first order, we should make sure that CRBMs were properly trained (metric ``test_success_rate`` plateaus at a nontrivial value) and also the energy estimate declines.
+
+## DMRG reference energies (`skqd_z2lgt.dmrg_gpu`)
+
+Classical ground-state energies in the vacuum and charge sectors, from DMRG on CPU or NVIDIA GPU,
+for both the dual Ising model (as in SKQD) and the primal link model with a Gauss-law penalty.
+See [skqd_z2lgt/dmrg_gpu/README.md](skqd_z2lgt/dmrg_gpu/README.md).
