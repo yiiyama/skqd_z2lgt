@@ -128,6 +128,7 @@ if __name__ == '__main__':
     import sys
     import argparse
     from jax.sharding import AxisType
+    from skqd_z2lgt.distributed import direct_sharding
     from skqd_z2lgt.orchestration.open_output import open_output
 
     parser = argparse.ArgumentParser()
@@ -147,9 +148,5 @@ if __name__ == '__main__':
     os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
     jax.config.update('jax_enable_x64', True)
 
-    if options.mpi:
-        jax.distributed.initialize(cluster_detection_method='mpi4py')
-    if (ndev := jax.device_count()) > 1:
-        jax.set_mesh(jax.make_mesh((ndev,), ('x',), (AxisType.Explicit,)))
-
+    direct_sharding(options.mpi, options.gpus)
     diagonalize_in_mode(open_output(options.pkgpath), options.mode, profile=options.profile)

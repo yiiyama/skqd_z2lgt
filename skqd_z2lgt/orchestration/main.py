@@ -164,6 +164,8 @@ async def train_generators(parameters: Parameters):
     logger = get_run_logger()
 
     gpus = (await Variable.get(parameters.hpc_profile)).get('gpus')
+    if isinstance(gpus, str):
+        gpus = list(map(int, gpus.split(',')))
 
     futures = {}
     igpu = 0
@@ -238,11 +240,13 @@ async def diagonalize(parameters: Parameters):
     ]
     walltime = '02:00:00'
     if num_nodes > 1:
-        user_args += ['--mpi']
-        walltime = '08:00:00'
-
-    if (gpus := (await Variable.get(parameters.hpc_profile)).get('gpus')):
-        user_args += ['--gpus', gpus]
+        if (await HPCProfileBlock.load(parameters.hpc_profile)).hpc_target != 'local':
+            user_args += ['--mpi']
+            walltime = '08:00:00'
+        elif (gpus := (await Variable.get(parameters.hpc_profile)).get('gpus')):
+            if isinstance(gpus, list):
+                gpus = ','.join(f'{i}' for i in gpus)
+            user_args += ['--gpus', gpus]
 
     result = await run_job_from_blocks(
         command_block_name=parameters.python_cuda_cmd,
