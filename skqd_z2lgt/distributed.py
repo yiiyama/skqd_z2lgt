@@ -17,8 +17,8 @@ def parse_gpus(gpus: str | list):
     return gpus
 
 
-def qubit_sharding(mpi: bool | str = False, gpus: str | list = None, set_mesh: bool = True):
-    """Return a NamedSharding over a mesh with shape (2,)*(log2 NGPU)."""
+def distributed_initialize(mpi: bool | str = False, gpus: str | list[int] = None):
+    """Call distributed.initialize() or set CUDA_VISIBLE_DEVICES."""
     if mpi:
         from mpi4py import MPI
 
@@ -48,7 +48,39 @@ def qubit_sharding(mpi: bool | str = False, gpus: str | list = None, set_mesh: b
     elif gpus:
         LOG.info('Parallelizing over %s', gpus)
         os.environ['CUDA_VISIBLE_DEVICES'] = parse_gpus(gpus)
+
+
+def direct_sharding(mpi: bool | str = False, gpus: str | list = None, set_mesh: bool = True):
+    """Return a NamedSharding over a mesh with shape (NGPU,)."""
+    distributed_initialize(mpi, gpus)
+
+    if (ndev := jax.device_count()) == 1:
+        return None
     
+    if mpi:
+        unique_slices = set(getattr(d, 'slice_index', 0) for d in jax.devices())
+        num_slices = len(unique_slices)
+        ndev_per_slice = ndev // num_slices
+        inner_mesh_shape = (1, ndev_per_slice)
+        outer_mesh_shape = (num_slices, 1)
+        axis_names = ('x', 'y')
+        if jax.process_index() == 0:
+            LOG.info('Inner mesh shape: %s, outer mesh shape: %s',
+                     inner_mesh_shape, outer_mesh_shape)
+        mesh = Mesh(create_hybrid_device_mesh(inner_mesh_shape, outer_mesh_shape),
+                    axis_names=axis_names, axis_types=(AxisType.Explicit,) * 2)
+    else:
+        mesh = jax.make_mesh((ndev, 1), ('x', 'y'), axis_types=(AxisType.Explicit,) * 2)
+    if set_mesh:
+        jax.set_mesh(mesh)
+    return NamedSharding(mesh, PartitionSpec(axis_names))
+
+
+
+def qubit_sharding(mpi: bool | str = False, gpus: str | list = None, set_mesh: bool = True):
+    """Return a NamedSharding over a mesh with shape (2,)*(log2 NGPU)."""
+    distributed_initialize(mpi, gpus)
+
     if (ndev := jax.device_count()) == 1:
         return None
     
