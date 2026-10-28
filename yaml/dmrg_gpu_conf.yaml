@@ -1,0 +1,28 @@
+---
+# Same format as the "lgt" section of parameters.yaml. Omitting "lattice" uses the full_156q lattice.
+lgt:
+  plaquette_energy: 1.
+  charged_vertices: [0, 4]  # [] for the vacuum
+dmrg_gpu:
+  model: both  # dual | primal | both
+  # ITensors-style sweep schedule. Either per-parameter lists (the last value repeats up to
+  # nsweeps) or a table whose last row repeats, e.g.
+  #   sweeps:
+  #     nsweeps: 14
+  #     table: |
+  #       maxdim mindim cutoff noise
+  #       32     8      1e-10  1e-3
+  #       256    8      1e-10  1e-5
+  #       2048   8      1e-10  0
+  # Columns / keys: maxdim mindim cutoff noise krylovdim maxiter
+  sweeps:
+    nsweeps: 14
+    maxdim: [32, 64, 128, 256, 512, 512, 1024, 1024, 2048]
+    cutoff: [1.e-10]
+    noise: [1.e-3, 1.e-4, 1.e-5, 1.e-6, 1.e-7, 0.]
+  penalty: 4.  # energy per violated Gauss law (primal only)
+  svd: eigh  # eigh is much faster than gesvd on GPU at large bond dimension
+  ordering: snake  # snake | snake-rows | snake-columns | rcm | natural
+  energy_tol: 1.e-8  # stop when |dE| < tol on a noiseless sweep with non-growing maxdim
+  num_samples: 0
+  seed: 0

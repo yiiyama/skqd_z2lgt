@@ -35,6 +35,10 @@ dependencies = [
     "heavyhex-qft"
 ]
 
+[project.optional-dependencies]
+gpu-cuda12 = ["cupy-cuda12x>=13"]
+gpu-cuda11 = ["cupy-cuda11x>=13"]
+
 [project.scripts]
 skqd-z2lgt = "skqd_z2lgt.orchestration.main:run"
 skqd-z2lgt-deploy = "skqd_z2lgt.orchestration.main:deploy"
