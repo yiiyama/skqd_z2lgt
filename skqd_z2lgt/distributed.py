@@ -70,7 +70,7 @@ def direct_sharding(mpi: bool | str = False, gpus: str | list = None, set_mesh: 
         mesh = Mesh(create_hybrid_device_mesh(inner_mesh_shape, outer_mesh_shape),
                     axis_names=axis_names, axis_types=(AxisType.Explicit,) * 2)
     else:
-        mesh = jax.make_mesh((ndev, 1), ('x', 'y'), axis_types=(AxisType.Explicit,) * 2)
+        mesh = jax.make_mesh((ndev, 1), axis_names, axis_types=(AxisType.Explicit,) * 2)
     if set_mesh:
         jax.set_mesh(mesh)
     return NamedSharding(mesh, PartitionSpec(axis_names))
