@@ -15,7 +15,6 @@ from prefect.variables import Variable
 from qcsc_prefect_executor.from_blocks import run_job_from_blocks
 from qcsc_prefect_blocks.common import HPCProfileBlock
 from qcsc_prefect.integrations.qiskit import QiskitRuntimeConfig
-from skqd_z2lgt.orchestration.common import make_lattice
 from skqd_z2lgt.orchestration.parameters import Parameters
 from skqd_z2lgt.orchestration.open_output import open_output, open_from_yaml
 from skqd_z2lgt.orchestration.sample_quantum import (
@@ -23,6 +22,7 @@ from skqd_z2lgt.orchestration.sample_quantum import (
     filter_out_completed,
     run_sampler
 )
+from skqd_z2lgt.orchestration.diagonalize import get_expected_footprint
 from skqd_z2lgt.orchestration.io import load_dmrg, load_skqd_result
 
 
@@ -42,37 +42,43 @@ async def skqd_z2lgt(parameters: Parameters) -> float:
     reco_filenames = reco_exp_filenames + reco_ref_filenames
     crbm_filenames = [f'crbm/{s}.h5' for s in suffices]
 
+    result_storage = await get_result_storage(parameters)
     cache_policy = CacheKeyFnPolicy(cache_key_fn=assert_assets).configure(
-        key_storage=Path(get_run_context().result_store.result_storage.basepath) / 'cache_keys'
+        key_storage=Path(result_storage.basepath) / 'cache_keys'
     )
 
     if parameters.dmrg:
         dmrg_future = dmrg.with_options(
             assets=[(Path(parameters.pkgpath) / 'dmrg.h5').as_uri()],
-            cache_policy=cache_policy
+            cache_policy=cache_policy,
+            result_storage=result_storage
         ).submit(parameters)
     
     await sample_quantum.with_options(
         assets=[(Path(parameters.pkgpath) / f).as_uri() for f in raw_filenames],
-        cache_policy=cache_policy
+        cache_policy=cache_policy,
+        result_storage=result_storage
     )(parameters)
 
     await preprocess.with_options(
         assets=[(Path(parameters.pkgpath) / f).as_uri() for f in reco_filenames],
         asset_deps=[(Path(parameters.pkgpath) / f).as_uri() for f in raw_filenames],
-        cache_policy=cache_policy
+        cache_policy=cache_policy,
+        result_storage=result_storage
     )(parameters)
 
     await train_generators.with_options(
         assets=[(Path(parameters.pkgpath) / f).as_uri() for f in crbm_filenames],
         asset_deps=[(Path(parameters.pkgpath) / f).as_uri() for f in reco_ref_filenames],
-        cache_policy=cache_policy
+        cache_policy=cache_policy,
+        result_storage=result_storage
     )(parameters)
 
     energy_cr = await diagonalize.with_options(
         assets=[(Path(parameters.pkgpath) / 'skqd_cr.h5').as_uri()],
         asset_deps=[(Path(parameters.pkgpath) / f).as_uri() for f in reco_exp_filenames],
-        cache_policy=cache_policy
+        cache_policy=cache_policy,
+        result_storage=result_storage
     )(parameters)
 
     if parameters.dmrg:
@@ -82,6 +88,17 @@ async def skqd_z2lgt(parameters: Parameters) -> float:
     logger.info('SKQD energy (full conf. recovery): %f', energy_cr)
 
     return energy_cr
+
+
+async def get_result_storage(parameters: Parameters):
+    block_name = hashlib.md5(parameters.pkgpath.encode('utf-8')).hexdigest()
+    try:
+        storage = await LocalFileSystem.load(block_name)
+    except ValueError:
+        storage = LocalFileSystem(basepath=str(Path(parameters.pkgpath) / 'results'))
+        await storage.save(block_name)
+
+    return storage
 
 
 def assert_assets(context, inputs):
@@ -162,6 +179,7 @@ async def preprocess(parameters: Parameters):
 @materialize('file://', asset_deps=[])
 async def train_generators(parameters: Parameters):
     logger = get_run_logger()
+    task = get_run_context().task
 
     gpus = (await Variable.get(parameters.hpc_profile)).get('gpus')
     if isinstance(gpus, str):
@@ -183,7 +201,9 @@ async def train_generators(parameters: Parameters):
             future = train_single_generator.with_options(
                 assets=[(Path(parameters.pkgpath) / f'crbm/dt{idt}_k{step}.h5').as_uri()],
                 asset_deps=[(Path(parameters.pkgpath) / f'data/reco/dt{idt}_k{step}.h5').as_uri()],
-                name=f'train_single_generator_dt{idt}_k{step}'
+                cache_policy=task.cache_policy,
+                name=f'train_single_generator_dt{idt}_k{step}',
+                result_storage=task.result_storage
             ).submit(parameters, idt, step, add_args)
             futures[(idt, step)] = future
 
@@ -222,16 +242,14 @@ async def diagonalize(parameters: Parameters):
     logger = get_run_logger()
     
     # Determine the required number of nodes
-    gen_size = (len(parameters.circuit.dts) * len(parameters.circuit.sampled_steps)
-                * parameters.runtime.shots_exp * parameters.skqd.num_gen)
-    num_p = make_lattice(parameters).num_active_plaquettes
-    pt_core_size = sum(math.comb(num_p, i) for i in range(parameters.skqd.pt_core_max + 1))
-    # 4 bytes per index, gen+carryover+pt_core indices per X signature, num_p + 1 X signatures
-    xcache_size = 4 * (gen_size + parameters.skqd.carryover + pt_core_size) * (num_p + 1)
+    
     gpu_memory = (await Variable.get(parameters.hpc_profile)).get('gpu_memory_gib', 80) *  (2 ** 30)
-    # X cache is the largest memory chunk but there are some more arrays.
-    # Give a safety margin of factor 2.
-    num_nodes = 2 ** int(math.ceil(math.log2(math.ceil(xcache_size / gpu_memory * 2))))
+    footprint = get_expected_footprint(parameters)
+    # Give a comfort factor of 1.2
+    minimum_num_nodes = footprint * 1.2 / gpu_memory
+    num_devices = 2 ** int(math.ceil(math.log2(minimum_num_nodes)))
+    logger.info('Expected footprint %.2f GiB, memory %.2f GiB per GPU. Sharding over %d devices.',
+                footprint / (2 ** 30), gpu_memory / (2 ** 30), num_devices)
 
     user_args = [
         str(Path(__file__).parents[0] / 'diagonalize.py'),
@@ -239,10 +257,10 @@ async def diagonalize(parameters: Parameters):
         'cr'
     ]
     walltime = '02:00:00'
-    if num_nodes > 1:
+    if num_devices > 1:
         if (await HPCProfileBlock.load(parameters.hpc_profile)).hpc_target != 'local':
             user_args += ['--mpi']
-            walltime = '08:00:00'
+            walltime = '04:00:00'
         elif (gpus := (await Variable.get(parameters.hpc_profile)).get('gpus')):
             if isinstance(gpus, list):
                 gpus = ','.join(f'{i}' for i in gpus)
@@ -255,7 +273,7 @@ async def diagonalize(parameters: Parameters):
         work_dir=Path(parameters.pkgpath) / 'work/diagonalize',
         user_args=user_args,
         script_filename='run',
-        execution_profile_overrides={'walltime': walltime, 'num_nodes': num_nodes}
+        execution_profile_overrides={'walltime': walltime, 'num_nodes': num_devices}
     )
     if result.exit_status != 0:
         raise RuntimeError(f"Diagonalize job failed: exit_status={result.exit_status}")
@@ -281,14 +299,7 @@ def run():
     else:
         parameters = open_from_yaml(options.parameters, overwrite=options.overwrite)
 
-    block_name = hashlib.md5(parameters.pkgpath.encode('utf-8')).hexdigest()
-    try:
-        storage = LocalFileSystem.load(block_name)
-    except ValueError:
-        storage = LocalFileSystem(basepath=str(Path(parameters.pkgpath) / 'results'))
-        storage.save(block_name)
-
-    asyncio.run(skqd_z2lgt.with_options(result_storage=storage)(parameters))
+    asyncio.run(skqd_z2lgt(parameters))
 
 
 def deploy():
@@ -298,7 +309,9 @@ def deploy():
     os.chdir(Path(__file__).parent)
 
     # Deploy the workflow with specified options.
-    skqd_z2lgt.with_options(version=os.getenv("WF_VERSION", "unknown")).serve(
+    skqd_z2lgt.with_options(
+        version=os.getenv("WF_VERSION", "unknown")
+    ).serve(
         name="skqd_z2lgt",
         description="SKQD experiment for Z2 LGT."
     )

@@ -1,6 +1,7 @@
 # pylint: disable=no-member
 """SKQD with configuration recovery."""
 import logging
+import math
 from typing import Optional
 import numpy as np
 from numpy.typing import NDArray
@@ -9,6 +10,7 @@ import jax.numpy as jnp
 from flax import nnx
 from rqutils.paulis.symplectic import PauliSumXZ
 from skqd_z2lgt.perturbative_sqd import make_pt_core, iterative_sqd
+from skqd_z2lgt.orchestration.common import make_lattice
 from skqd_z2lgt.orchestration.parameters import Parameters
 from skqd_z2lgt.orchestration.common import make_dual_lattice
 from skqd_z2lgt.orchestration.io import load_reco, save_skqd_result
@@ -106,7 +108,8 @@ def diagonalize_in_mode(
     )
     logger.info('Generating the PT core (<=%d excitations)', parameters.skqd.pt_core_max)
     pt_core = make_pt_core(plaq_data.shape[-1], parameters.skqd.pt_core_max)
-    logger.info('Starting SKQD iterations')
+    logger.info('Starting SKQD iterations. Max iterations %d, convergence tolerance %.1e',
+                parameters.skqd.max_iterations, parameters.skqd.energy_convergence)
     if profile:
         jax.profiler.start_trace(profile)
     energies, subspace_dims = iterative_sqd(hamiltonian, generators, syndrome_data, plaq_data,
@@ -123,11 +126,27 @@ def diagonalize_in_mode(
     return float(energies[-1])
 
 
+def get_expected_footprint(parameters: Parameters):
+    """Compute the expected device RAM usage in bytes."""
+    gen_size = (len(parameters.circuit.dts) * len(parameters.circuit.sampled_steps)
+                * parameters.runtime.shots_exp * parameters.skqd.num_gen)
+    num_p = make_lattice(parameters).num_active_plaquettes
+    pt_core_size = sum(math.comb(num_p, i) for i in range(parameters.skqd.pt_core_max + 1))
+    # Size of the SQD subspace N
+    subspace_size = gen_size + parameters.skqd.carryover + pt_core_size
+    # 4 bytes per index, N indices per X signature, num_p + 1 X signatures
+    xcache_size = 4 * subspace_size * (num_p + 1)
+    # 8 bytes per entry, N entries per materialization, 9+ materializations (depends on sharding)
+    vectors_size = 8 * subspace_size * 18
+    # ⌈(nq+1)/8⌉ bytes per state, N+pt_core states
+    states_size = np.ceil((num_p + 1) / 8).astype(int) * (subspace_size + pt_core_size)
+    return xcache_size + vectors_size + states_size
+
+
 if __name__ == '__main__':
     import os
     import sys
     import argparse
-    from jax.sharding import AxisType
     from skqd_z2lgt.distributed import direct_sharding
     from skqd_z2lgt.orchestration.open_output import open_output
 
@@ -141,7 +160,6 @@ if __name__ == '__main__':
     options = parser.parse_args()
 
     logging.basicConfig(level=getattr(logging, options.log_level.upper()), stream=sys.stdout)
-    logging.getLogger('jax').setLevel(logging.WARNING)
 
     if options.gpus:
         os.environ['CUDA_VISIBLE_DEVICES'] = options.gpus
