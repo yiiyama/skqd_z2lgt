@@ -56,6 +56,8 @@ def direct_sharding(mpi: bool | str = False, gpus: str | list = None, set_mesh: 
 
     if (ndev := jax.device_count()) == 1:
         return None
+
+    axis_names = ('x', 'y')
     
     if mpi:
         unique_slices = set(getattr(d, 'slice_index', 0) for d in jax.devices())
@@ -63,7 +65,6 @@ def direct_sharding(mpi: bool | str = False, gpus: str | list = None, set_mesh: 
         ndev_per_slice = ndev // num_slices
         inner_mesh_shape = (1, ndev_per_slice)
         outer_mesh_shape = (num_slices, 1)
-        axis_names = ('x', 'y')
         if jax.process_index() == 0:
             LOG.info('Inner mesh shape: %s, outer mesh shape: %s',
                      inner_mesh_shape, outer_mesh_shape)
