@@ -157,6 +157,6 @@ def iterative_sqd(
         jnp.zeros((carryover_size, pt_core.shape[-1]), dtype=np.uint8),
         generators
     )
-    iteration, history, selected_states = nnx.while_loop(cond_fn, body_fn, init)[:3]
+    iteration, history, selected_states, generators = nnx.while_loop(cond_fn, body_fn, init)
 
     return run_and_record(iteration, history, selected_states, generators, return_states=False)
