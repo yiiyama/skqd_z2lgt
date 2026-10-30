@@ -216,10 +216,11 @@ async def train_generators(parameters: Parameters):
 
 @materialize('file://', asset_deps=[])
 async def train_single_generator(parameters: Parameters, idt: int, step: int, add_args: list[str]):
+    hpc_profile = parameters.hpc_mig_profile or parameters.hpc_profile
     result = await run_job_from_blocks(
         command_block_name=parameters.python_cuda_cmd,
         execution_profile_block_name=parameters.python_gpu_single_exec_profile,
-        hpc_profile_block_name=parameters.hpc_profile,
+        hpc_profile_block_name=hpc_profile,
         work_dir=Path(parameters.pkgpath) / 'work' / get_run_context().task.name,
         user_args=[
             str(Path(__file__).parents[0] / 'train_generator.py'),

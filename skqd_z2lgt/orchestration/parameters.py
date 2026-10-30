@@ -303,7 +303,7 @@ class Parameters(BaseModel):
 
     python_gpu_mpi_exec_profile: str = Field(
         default='python-gpu-mpi',
-        description='Name of the Execution profile block for GPU-bound single-node Python job.',
+        description='Name of the Execution profile block for GPU-bound multi-node Python job.',
         title='Python GPU-bound multi-node execution profile'
     )
 
@@ -311,6 +311,12 @@ class Parameters(BaseModel):
         default='local',
         description='Name of the HPC Profile block.',
         title='HPC Profile block name'
+    )
+
+    hpc_mig_profile: str | None = Field(
+        default=None,
+        description='Name of the HPC Profile block (MIG queue).',
+        title='HPC Profile (MIG queue) block name'
     )
 
     def model_post_init(self, _):  # pylint: disable=arguments-differ
