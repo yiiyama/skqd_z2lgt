@@ -9,7 +9,7 @@ import jax.numpy as jnp
 from jax.sharding import get_abstract_mesh
 from flax import nnx
 from rqutils.paulis.symplectic import PauliSumXZ
-from rqutils.sqd import run_sqd
+from rqutils.sqd import SQDOptions, run_sqd
 
 
 def make_pt_core(
@@ -90,7 +90,9 @@ def compose_and_diagonalize(
             and (resid := sum(arr.shape[0] for arr in states_list) % mesh.size) != 0):
         states_list.append(jnp.zeros((mesh.size - resid, gen_states.shape[-1]), dtype=np.uint8))
     states_p = jnp.concatenate(states_list, axis=0)
-    eigval, eigvec, states_u, subspace_dim = run_sqd(hamiltonian, states_p, states_p.shape[0], True)
+    options = SQDOptions(shard_bundle=0)
+    eigval, eigvec, states_u, subspace_dim = run_sqd(hamiltonian, states_p, states_p.shape[0],
+                                                     options=options)
     if return_best == 0:
         return eigval, subspace_dim
 
