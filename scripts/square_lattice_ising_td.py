@@ -8,7 +8,7 @@ import jax
 import jax.numpy as jnp
 from rqutils.paulis.symplectic import PauliSumXZ
 from rqutils.sqd import run_sqd
-from skqd_z2lgt.perturbative_sqd import make_pt_core
+from skqd_z2lgt.truncation_sqd import make_pt_core
 from skqd_z2lgt.square_ising import make_primal_graph, get_hamiltonian_coeffs
 
 

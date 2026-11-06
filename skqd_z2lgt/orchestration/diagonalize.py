@@ -9,7 +9,7 @@ import jax
 import jax.numpy as jnp
 from flax import nnx
 from rqutils.paulis.symplectic import PauliSumXZ
-from skqd_z2lgt.perturbative_sqd import make_pt_core, iterative_sqd
+from skqd_z2lgt.truncation_sqd import make_pt_core, iterative_sqd
 from skqd_z2lgt.orchestration.common import make_lattice
 from skqd_z2lgt.orchestration.parameters import Parameters
 from skqd_z2lgt.orchestration.common import make_dual_lattice

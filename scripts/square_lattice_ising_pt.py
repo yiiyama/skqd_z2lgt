@@ -5,10 +5,9 @@ from pathlib import Path
 import numpy as np
 import h5py
 import jax
-from skqd_z2lgt.perturbative_sqd import make_pt_core
-sys.path.append(str(Path(__file__).parents[1] / 'lib'))
-from perturbation import make_perturbation_series
-from square_ising import make_primal_graph
+from skqd_z2lgt.truncation_sqd import make_pt_core
+from skqd_z2lgt.perturbation import make_perturbation_series
+from skqd_z2lgt.square_ising import make_primal_graph
 
 
 def get_perturbation_coeffs(primal_graph, max_order):
