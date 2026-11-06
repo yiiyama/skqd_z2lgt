@@ -115,7 +115,7 @@ def compose_and_diagonalize(
     return eigval, subspace_dim, states
 
 
-@nnx.jit(static_argnames=['num_gen', 'carryover_size', 'num_iter', 'log_level'])
+@nnx.jit(static_argnames=['num_gen', 'carryover_size', 'num_iter', 'callback', 'log_level'])
 def iterative_sqd(
     hamiltonian: PauliSumXZ,
     generators: nnx.Module,
@@ -126,6 +126,7 @@ def iterative_sqd(
     carryover_size: int,
     num_iter: int,
     tol: float,
+    init: Optional[tuple] = None,
     callback: Optional[Callable] = None,
     log_level: int = logging.INFO
 ):
@@ -148,7 +149,7 @@ def iterative_sqd(
         _history = (_history[0].at[_iteration].set(eigval),
                     _history[1].at[_iteration].set(subspace_dim))
 
-        if callback is not None:
+        if return_states and callback is not None:
             io_callback(callback, None, _iteration, result, _history)
 
         if return_states:
@@ -160,12 +161,13 @@ def iterative_sqd(
         _history, _carryover = run_and_record(_iteration, _history, _carryover, _generators)
         return (_iteration + 1, _history, _carryover, _generators)
 
-    init = (
-        0,
-        (jnp.empty(num_iter + 1, dtype=np.float64), jnp.empty(num_iter + 1, dtype=np.int32)),
-        jnp.zeros((carryover_size, pt_core.shape[-1]), dtype=np.uint8),
-        generators
-    )
+    if init is None:
+        init = (
+            0,
+            (jnp.empty(num_iter + 1, dtype=np.float64), jnp.empty(num_iter + 1, dtype=np.int32)),
+            jnp.zeros((carryover_size, pt_core.shape[-1]), dtype=np.uint8),
+        )
+    init += (generators,)
     iteration, history, selected_states, generators = nnx.while_loop(cond_fn, body_fn, init)
 
     return run_and_record(iteration, history, selected_states, generators, return_states=False)

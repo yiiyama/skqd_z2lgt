@@ -4,6 +4,7 @@ from pathlib import Path
 import logging
 from typing import Optional
 import numpy as np
+from scipy.sparse import csr_array
 import h5py
 from qiskit.primitives import BitArray
 from skqd_z2lgt.utils import read_bits, save_bits
@@ -241,6 +242,20 @@ def initialize_skqd_snapshot(
         out.create_dataset('energies', (parameters.skqd.max_iterations + 1,), np.float64)
         out.create_dataset('subspace_dims', (parameters.skqd.max_iterations + 1,), np.int32)
         out.create_dataset('carryover', (parameters.skqd.carryover, num_bytes), np.uint8)
+
+
+def load_skqd_snapshot(
+    parameters: Parameters,
+    mode: str
+):
+    path = Path(parameters.pkgpath) / f'skqd_{mode}_snapshot.h5'
+    with h5py.File(path, 'r', libver='latest') as source:
+        iteration = source['iteration'][()]
+        energies = source['energies'][:]
+        subspace_dims = source['subspace_dims'][:]
+        carryover = source['carryover'][:]
+
+    return iteration, energies, subspace_dims, carryover
 
 
 def save_skqd_snapshot(

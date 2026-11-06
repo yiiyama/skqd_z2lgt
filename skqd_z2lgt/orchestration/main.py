@@ -243,7 +243,6 @@ async def diagonalize(parameters: Parameters):
     logger = get_run_logger()
     
     # Determine the required number of nodes
-    
     gpu_memory = (await Variable.get(parameters.hpc_profile)).get('gpu_memory_gib', 80) *  (2 ** 30)
     footprint = get_expected_footprint(parameters)
     # Give a comfort factor of 1.2
@@ -257,6 +256,9 @@ async def diagonalize(parameters: Parameters):
         parameters.pkgpath,
         'cr'
     ]
+    if os.path.exists(Path(parameters.pkgpath) / f'skqd_cr_snapshot.h5'):
+        user_args.append('--continue')
+
     walltime = '02:00:00'
     if num_devices > 1:
         if (await HPCProfileBlock.load(parameters.hpc_profile)).hpc_target != 'local':

@@ -17,7 +17,8 @@ from skqd_z2lgt.orchestration.io import (
     load_reco,
     save_skqd_result,
     initialize_skqd_snapshot,
-    save_skqd_snapshot
+    save_skqd_snapshot,
+    load_skqd_snapshot
 )
 from skqd_z2lgt.orchestration.train_generator import load_model
 
@@ -90,7 +91,8 @@ def prepare_rand_generators(parameters: Parameters) -> RandomExcitation:
 def diagonalize_in_mode(
     parameters: Parameters,
     mode: str,  # 'cr' or 'rn'
-    profile: Optional[str] = None,
+    continue_from_snapshot: bool = False,
+    profile: Optional[str] = None,    
     logger: Optional[logging.Logger] = None
 ) -> float:
     """Project and diagonalize the Hamiltonian with configuration recovery or random bitflips."""
@@ -116,7 +118,11 @@ def diagonalize_in_mode(
     logger.info('Starting SKQD iterations. Max iterations %d, convergence tolerance %.1e',
                 parameters.skqd.max_iterations, parameters.skqd.energy_convergence)
 
-    if jax.process_index() == 0:
+    init = None
+    if continue_from_snapshot:
+        snapshot = load_skqd_snapshot(parameters, mode)
+        init = (snapshot[0], (snapshot[1], snapshot[2]), snapshot[3])
+    elif jax.process_index() == 0:
         initialize_skqd_snapshot(parameters, mode)
 
     def callback(iteration, result, history):
@@ -130,7 +136,7 @@ def diagonalize_in_mode(
                                             parameters.skqd.carryover,
                                             parameters.skqd.max_iterations,
                                             parameters.skqd.energy_convergence,
-                                            callback=callback)
+                                            init=init, callback=callback)
     if profile:
         jax.profiler.stop_trace()
 
@@ -167,6 +173,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('pkgpath')
     parser.add_argument('mode')
+    parser.add_argument('--continue', action='store_true', dest='continue_from_snapshot')
     parser.add_argument('--mpi', action='store_true')
     parser.add_argument('--gpus', help='CUDA_VISIBLE_DEVICES')
     parser.add_argument('--profile')
@@ -181,4 +188,6 @@ if __name__ == '__main__':
     jax.config.update('jax_enable_x64', True)
 
     direct_sharding(options.mpi, options.gpus)
-    diagonalize_in_mode(open_output(options.pkgpath), options.mode, profile=options.profile)
+    diagonalize_in_mode(open_output(options.pkgpath), options.mode,
+                        continue_from_snapshot=options.continue_from_snapshot,
+                        profile=options.profile)
