@@ -1,4 +1,5 @@
 """Iterative SQD with perturbative core."""
+from collections.abc import Callable
 import math
 import logging
 from typing import Optional
@@ -6,6 +7,7 @@ import numpy as np
 from numpy.typing import NDArray
 import jax
 import jax.numpy as jnp
+from jax.experimental import io_callback
 from jax.sharding import get_abstract_mesh
 from flax import nnx
 from rqutils.paulis.symplectic import PauliSumXZ
@@ -124,6 +126,7 @@ def iterative_sqd(
     carryover_size: int,
     num_iter: int,
     tol: float,
+    callback: Optional[Callable] = None,
     log_level: int = logging.INFO
 ):
     def cond_fn(val):
@@ -144,6 +147,10 @@ def iterative_sqd(
             jax.debug.print('Iteration {}: energy {}', _iteration, eigval)
         _history = (_history[0].at[_iteration].set(eigval),
                     _history[1].at[_iteration].set(subspace_dim))
+
+        if callback is not None:
+            io_callback(callback, None, _iteration, result, _history)
+
         if return_states:
             return _history, result[2]
         return _history

@@ -4,11 +4,11 @@ from pathlib import Path
 import logging
 from typing import Optional
 import numpy as np
-from scipy.sparse import csr_array
 import h5py
-from qiskit.primitives import BitArray, PrimitiveResult
+from qiskit.primitives import BitArray
 from skqd_z2lgt.utils import read_bits, save_bits
 from skqd_z2lgt.orchestration.parameters import Parameters
+from skqd_z2lgt.orchestration.common import make_lattice
 
 RecoData = tuple[np.ndarray, np.ndarray]  # (syndrome, plaquette data)
 
@@ -225,6 +225,38 @@ def save_skqd_result(
         #     group.create_dataset('data', data=ham_proj.data)
         #     group.create_dataset('indices', data=ham_proj.indices)
         #     group.create_dataset('indptr', data=ham_proj.indptr)
+
+
+def initialize_skqd_snapshot(
+    parameters: Parameters,
+    mode: str
+):
+    """Create the snapshot file."""
+    num_plaquettes = make_lattice(parameters).num_active_plaquettes
+    num_bytes = np.ceil((num_plaquettes + 1) / 8).astype(int)
+
+    path = Path(parameters.pkgpath) / f'skqd_{mode}_snapshot.h5'
+    with h5py.File(path, 'w', libver='latest') as out:
+        out.create_dataset('iteration', (), np.int32)
+        out.create_dataset('energies', (parameters.skqd.max_iterations + 1,), np.float64)
+        out.create_dataset('subspace_dims', (parameters.skqd.max_iterations + 1,), np.int32)
+        out.create_dataset('carryover', (parameters.skqd.carryover, num_bytes), np.uint8)
+
+
+def save_skqd_snapshot(
+    parameters: Parameters,
+    mode: str,
+    iteration: int,
+    energies: np.ndarray,
+    subspace_dims: np.ndarray,
+    carryover: np.ndarray
+):
+    path = Path(parameters.pkgpath) / f'skqd_{mode}_snapshot.h5'
+    with h5py.File(path, 'a', libver='latest') as out:
+        out['iteration'][()] = iteration
+        out['energies'][:] = energies
+        out['subspace_dims'][:] = subspace_dims
+        out['carryover'][:] = carryover
 
 
 def load_projected_hamiltonian(source: h5py.Group):

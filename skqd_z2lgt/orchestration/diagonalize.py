@@ -13,7 +13,12 @@ from skqd_z2lgt.truncation_sqd import make_pt_core, iterative_sqd
 from skqd_z2lgt.orchestration.common import make_lattice
 from skqd_z2lgt.orchestration.parameters import Parameters
 from skqd_z2lgt.orchestration.common import make_dual_lattice
-from skqd_z2lgt.orchestration.io import load_reco, save_skqd_result
+from skqd_z2lgt.orchestration.io import (
+    load_reco,
+    save_skqd_result,
+    initialize_skqd_snapshot,
+    save_skqd_snapshot
+)
 from skqd_z2lgt.orchestration.train_generator import load_model
 
 
@@ -110,13 +115,22 @@ def diagonalize_in_mode(
     pt_core = make_pt_core(plaq_data.shape[-1], parameters.skqd.pt_core_max)
     logger.info('Starting SKQD iterations. Max iterations %d, convergence tolerance %.1e',
                 parameters.skqd.max_iterations, parameters.skqd.energy_convergence)
+
+    if jax.process_index() == 0:
+        initialize_skqd_snapshot(parameters, mode)
+
+    def callback(iteration, result, history):
+        if jax.process_index() == 0:
+            save_skqd_snapshot(parameters, mode, iteration, history[0], history[1], result[2])
+    
     if profile:
         jax.profiler.start_trace(profile)
     energies, subspace_dims = iterative_sqd(hamiltonian, generators, syndrome_data, plaq_data,
                                             parameters.skqd.num_gen, pt_core,
                                             parameters.skqd.carryover,
                                             parameters.skqd.max_iterations,
-                                            parameters.skqd.energy_convergence)
+                                            parameters.skqd.energy_convergence,
+                                            callback=callback)
     if profile:
         jax.profiler.stop_trace()
 
