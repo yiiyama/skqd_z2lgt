@@ -131,6 +131,7 @@ def train_single_model(
 
 if __name__ == '__main__':
     import sys
+    import time
     import argparse
     from itertools import product
     from skqd_z2lgt.orchestration.open_output import open_output
@@ -143,21 +144,27 @@ if __name__ == '__main__':
     parser.add_argument('--gpu')
     parser.add_argument('--profile')
     parser.add_argument('--log-level', default='INFO')
-    args = parser.parse_args()
+    options = parser.parse_args()
 
-    logging.basicConfig(level=getattr(logging, args.log_level.upper()), stream=sys.stdout)
-    logging.getLogger('jax').setLevel(logging.WARNING)
+    logging.basicConfig(
+        level=getattr(logging, options.log_level.upper()),
+        format='%(asctime)s [%(name)s] %(levelname)s: %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S',
+        stream=sys.stdout
+    )
+    if (jobid := os.getenv('PBS_JOBID')):
+        print(f'PBS JOBID {jobid} started at {time.asctime()}')
 
-    if args.gpu:
-        os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu
+    if options.gpu:
+        os.environ['CUDA_VISIBLE_DEVICES'] = options.gpu
     os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
     jax.config.update('jax_enable_x64', True)
 
-    parameters = open_output(args.pkgpath)
+    parameters = open_output(options.pkgpath)
 
-    if args.idt:
-        idts = list(map(int, args.idt.split(',')))
-        steps = list(map(int, args.step.split(',')))
+    if options.idt:
+        idts = list(map(int, options.idt.split(',')))
+        steps = list(map(int, options.step.split(',')))
         if len(idts) != len(steps):
             raise ValueError('Lengths of idt and step lists do not match')
         task_specs = list(zip(idts, steps))
@@ -166,19 +173,19 @@ if __name__ == '__main__':
         steps = parameters.circuit.sampled_steps
         task_specs = list(product(idts, steps))
 
-    if args.mpi:
+    if options.mpi:
         from mpi4py import MPI  # pylint: disable=no-name-in-module
         comm = MPI.COMM_WORLD
         task_specs = [task_specs[comm.Get_rank()]]
 
-    if args.gpu and ',' in args.gpu:
+    if options.gpu and ',' in options.gpu:
         from concurrent.futures import ThreadPoolExecutor
 
         def train_in_thread(idev, idt, step):
             with jax.default_device(jax.devices()[idev]):
                 train_single_model(parameters, idt, step)
 
-        ndev = len(args.gpu.split(','))
+        ndev = len(options.gpu.split(','))
         futures = []
         with ThreadPoolExecutor(max_workers=ndev) as executor:
             for itask, (idt, step) in enumerate(task_specs):
@@ -189,4 +196,4 @@ if __name__ == '__main__':
 
     else:
         for idt, step in task_specs:
-            train_single_model(parameters, idt, step, profile=args.profile)
+            train_single_model(parameters, idt, step, profile=options.profile)

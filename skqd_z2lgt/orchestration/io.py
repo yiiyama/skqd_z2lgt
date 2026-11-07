@@ -239,8 +239,8 @@ def initialize_skqd_snapshot(
     path = Path(parameters.pkgpath) / f'skqd_{mode}_snapshot.h5'
     with h5py.File(path, 'w', libver='latest') as out:
         out.create_dataset('iteration', (), np.int32)
-        out.create_dataset('energies', (parameters.skqd.max_iterations + 1,), np.float64)
-        out.create_dataset('subspace_dims', (parameters.skqd.max_iterations + 1,), np.int32)
+        out.create_dataset('energies', (parameters.skqd.max_iterations,), np.float64)
+        out.create_dataset('subspace_dims', (parameters.skqd.max_iterations,), np.int32)
         out.create_dataset('carryover', (parameters.skqd.carryover, num_bytes), np.uint8)
 
 

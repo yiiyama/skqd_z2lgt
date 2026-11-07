@@ -30,6 +30,7 @@ def preprocess_single_array(
 
 if __name__ == '__main__':
     import sys
+    import time
     import argparse
     from itertools import product
     from skqd_z2lgt.orchestration.open_output import open_output
@@ -43,7 +44,14 @@ if __name__ == '__main__':
     parser.add_argument('--log-level', default='INFO')
     options = parser.parse_args()
 
-    logging.basicConfig(level=getattr(logging, options.log_level.upper()), stream=sys.stdout)
+    logging.basicConfig(
+        level=getattr(logging, options.log_level.upper()),
+        format='%(asctime)s [%(name)s] %(levelname)s: %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S',
+        stream=sys.stdout
+    )
+    if (jobid := os.getenv('PBS_JOBID')):
+        print(f'PBS JOBID {jobid} started at {time.asctime()}')
 
     parameters = open_output(options.pkgpath)
 

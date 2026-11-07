@@ -91,7 +91,7 @@ def prepare_rand_generators(parameters: Parameters) -> RandomExcitation:
 def diagonalize_in_mode(
     parameters: Parameters,
     mode: str,  # 'cr' or 'rn'
-    continue_from_snapshot: bool = False,
+    resume: bool = False,
     profile: Optional[str] = None,    
     logger: Optional[logging.Logger] = None
 ) -> float:
@@ -119,7 +119,7 @@ def diagonalize_in_mode(
                 parameters.skqd.max_iterations, parameters.skqd.energy_convergence)
 
     init = None
-    if continue_from_snapshot:
+    if resume:
         snapshot = load_skqd_snapshot(parameters, mode)
         init = (snapshot[0], (snapshot[1], snapshot[2]), snapshot[3])
     elif jax.process_index() == 0:
@@ -166,6 +166,7 @@ def get_expected_footprint(parameters: Parameters):
 if __name__ == '__main__':
     import os
     import sys
+    import time
     import argparse
     from skqd_z2lgt.distributed import direct_sharding
     from skqd_z2lgt.orchestration.open_output import open_output
@@ -173,14 +174,21 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('pkgpath')
     parser.add_argument('mode')
-    parser.add_argument('--continue', action='store_true', dest='continue_from_snapshot')
+    parser.add_argument('--resume', action='store_true')
     parser.add_argument('--mpi', action='store_true')
     parser.add_argument('--gpus', help='CUDA_VISIBLE_DEVICES')
     parser.add_argument('--profile')
     parser.add_argument('--log-level', default='INFO')
     options = parser.parse_args()
 
-    logging.basicConfig(level=getattr(logging, options.log_level.upper()), stream=sys.stdout)
+    logging.basicConfig(
+        level=getattr(logging, options.log_level.upper()),
+        format='%(asctime)s [%(name)s] %(levelname)s: %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S',
+        stream=sys.stdout
+    )
+    if (jobid := os.getenv('PBS_JOBID')):
+        print(f'PBS JOBID {jobid} started at {time.asctime()}')
 
     if options.gpus:
         os.environ['CUDA_VISIBLE_DEVICES'] = options.gpus
@@ -188,6 +196,5 @@ if __name__ == '__main__':
     jax.config.update('jax_enable_x64', True)
 
     direct_sharding(options.mpi, options.gpus)
-    diagonalize_in_mode(open_output(options.pkgpath), options.mode,
-                        continue_from_snapshot=options.continue_from_snapshot,
+    diagonalize_in_mode(open_output(options.pkgpath), options.mode, resume=options.resume,
                         profile=options.profile)

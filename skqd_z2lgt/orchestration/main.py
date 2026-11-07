@@ -3,7 +3,6 @@ import asyncio
 from pathlib import Path
 import logging
 import json
-import tempfile
 import math
 import hashlib
 from prefect import flow, get_run_logger
@@ -23,7 +22,7 @@ from skqd_z2lgt.orchestration.sample_quantum import (
     run_sampler
 )
 from skqd_z2lgt.orchestration.diagonalize import get_expected_footprint
-from skqd_z2lgt.orchestration.io import load_dmrg, load_skqd_result
+from skqd_z2lgt.orchestration.io import load_dmrg, load_skqd_result, load_skqd_snapshot
 
 
 @flow(persist_result=True, result_serializer='json')
@@ -229,7 +228,7 @@ async def train_single_generator(parameters: Parameters, idt: int, step: int, ad
             '--step', f'{step}'
         ] + add_args,
         script_filename='run',
-        execution_profile_overrides={'walltime': '02:00:00'}
+        execution_profile_overrides={'walltime': '00:30:00'}
     )
     if result.exit_status != 0:
         raise RuntimeError(f"Train generator ({idt}, {step}) job failed:"
@@ -251,23 +250,31 @@ async def diagonalize(parameters: Parameters):
     logger.info('Expected footprint %.2f GiB, memory %.2f GiB per GPU. Sharding over %d devices.',
                 footprint / (2 ** 30), gpu_memory / (2 ** 30), num_devices)
 
+    snapshot_path = Path(parameters.pkgpath) / f'skqd_cr_snapshot.h5'
+    init_iter = 0
+
     user_args = [
         str(Path(__file__).parents[0] / 'diagonalize.py'),
         parameters.pkgpath,
         'cr'
     ]
-    if os.path.exists(Path(parameters.pkgpath) / f'skqd_cr_snapshot.h5'):
-        user_args.append('--continue')
 
-    walltime = '02:00:00'
+    if os.path.exists(snapshot_path):
+        user_args += ['--resume']
+        init_iter = load_skqd_snapshot(snapshot_path)[0] + 1
+
     if num_devices > 1:
         if (await HPCProfileBlock.load(parameters.hpc_profile)).hpc_target != 'local':
             user_args += ['--mpi']
-            walltime = '04:00:00'
         elif (gpus := (await Variable.get(parameters.hpc_profile)).get('gpus')):
             if isinstance(gpus, list):
                 gpus = ','.join(f'{i}' for i in gpus)
             user_args += ['--gpus', gpus]
+
+    expected_time = 200 * (parameters.skqd.max_iterations - init_iter)
+    hours, remainder = divmod(expected_time, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    walltime = f'{hours:02d}:{minutes:02d}:{seconds:02d}'
 
     result = await run_job_from_blocks(
         command_block_name=parameters.python_cuda_cmd,
