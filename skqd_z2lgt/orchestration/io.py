@@ -8,6 +8,7 @@ from scipy.sparse import csr_array
 import h5py
 from qiskit.primitives import BitArray
 from skqd_z2lgt.utils import read_bits, save_bits
+from skqd_z2lgt.recovery.crbm import ConditionalRBM
 from skqd_z2lgt.orchestration.parameters import Parameters
 from skqd_z2lgt.orchestration.common import make_lattice
 
@@ -235,13 +236,18 @@ def initialize_skqd_snapshot(
     """Create the snapshot file."""
     num_plaquettes = make_lattice(parameters).num_active_plaquettes
     num_bytes = np.ceil((num_plaquettes + 1) / 8).astype(int)
+    num_generators = len(parameters.circuit.dts) * len(parameters.circuit.sampled_steps)
 
     path = Path(parameters.pkgpath) / f'skqd_{mode}_snapshot.h5'
     with h5py.File(path, 'w', libver='latest') as out:
-        out.create_dataset('iteration', (), np.int32)
-        out.create_dataset('energies', (parameters.skqd.max_iterations,), np.float64)
-        out.create_dataset('subspace_dims', (parameters.skqd.max_iterations,), np.int32)
-        out.create_dataset('carryover', (parameters.skqd.carryover, num_bytes), np.uint8)
+        out.create_dataset('iteration', data=np.array(-1, dtype=np.int32))
+        out.create_dataset('energies',
+                           data=np.zeros((parameters.skqd.max_iterations + 1,), dtype=np.float64))
+        out.create_dataset('subspace_dims',
+                           data=np.zeros((parameters.skqd.max_iterations + 1,), dtype=np.int32))
+        out.create_dataset('carryover',
+                           data=np.zeros((parameters.skqd.carryover, num_bytes), dtype=np.uint8))
+        out.create_dataset('generator_counts', data=np.zeros((num_generators,), dtype=np.uint32))
 
 
 def load_skqd_snapshot(
@@ -254,8 +260,21 @@ def load_skqd_snapshot(
         energies = source['energies'][:]
         subspace_dims = source['subspace_dims'][:]
         carryover = source['carryover'][:]
+        generator_counts = source['generator_counts'][:]
 
-    return iteration, energies, subspace_dims, carryover
+    return iteration, energies, subspace_dims, carryover, generator_counts
+
+
+def check_skqd_snapshot(
+    parameters: Parameters,
+    mode: str
+):
+    path = Path(parameters.pkgpath) / f'skqd_{mode}_snapshot.h5'
+    if not os.path.exists(path):
+        return None
+
+    with h5py.File(path, 'r', libver='latest') as source:
+        return source['iteration'][()]
 
 
 def save_skqd_snapshot(
@@ -264,7 +283,8 @@ def save_skqd_snapshot(
     iteration: int,
     energies: np.ndarray,
     subspace_dims: np.ndarray,
-    carryover: np.ndarray
+    carryover: np.ndarray,
+    generators: ConditionalRBM
 ):
     path = Path(parameters.pkgpath) / f'skqd_{mode}_snapshot.h5'
     with h5py.File(path, 'a', libver='latest') as out:
@@ -272,6 +292,7 @@ def save_skqd_snapshot(
         out['energies'][:] = energies
         out['subspace_dims'][:] = subspace_dims
         out['carryover'][:] = carryover
+        out['generator_counts'][:] = generators.rngs.sample.count.get_value()
 
 
 def load_projected_hamiltonian(source: h5py.Group):

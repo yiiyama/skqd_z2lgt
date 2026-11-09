@@ -97,6 +97,8 @@ def diagonalize_in_mode(
 ) -> float:
     """Project and diagonalize the Hamiltonian with configuration recovery or random bitflips."""
     logger = logger or logging.getLogger(__name__)
+    if mode != 'cr':
+        raise NotImplementedError('Only cr mode is supported')
 
     logger.info('Padding and stacking data')
     syndrome_data, plaq_data = prepare_data(parameters)
@@ -121,13 +123,14 @@ def diagonalize_in_mode(
     init = None
     if resume:
         snapshot = load_skqd_snapshot(parameters, mode)
-        init = (snapshot[0], (snapshot[1], snapshot[2]), snapshot[3])
+        init = (snapshot[0] + 1, (snapshot[1], snapshot[2]), snapshot[3])
+        generators.rngs.sample.count.set_value(snapshot[4])
     elif jax.process_index() == 0:
         initialize_skqd_snapshot(parameters, mode)
 
-    def callback(iteration, result, history):
+    def callback(iteration, result, history, gens):
         if jax.process_index() == 0:
-            save_skqd_snapshot(parameters, mode, iteration, history[0], history[1], result[2])
+            save_skqd_snapshot(parameters, mode, iteration, history[0], history[1], result[2], gens)
     
     if profile:
         jax.profiler.start_trace(profile)

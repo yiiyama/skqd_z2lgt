@@ -150,7 +150,7 @@ def iterative_sqd(
                     _history[1].at[_iteration].set(subspace_dim))
 
         if return_states and callback is not None:
-            io_callback(callback, None, _iteration, result, _history)
+            io_callback(callback, None, _iteration, result, _history, _generators)
 
         if return_states:
             return _history, result[2]

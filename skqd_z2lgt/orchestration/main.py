@@ -22,7 +22,7 @@ from skqd_z2lgt.orchestration.sample_quantum import (
     run_sampler
 )
 from skqd_z2lgt.orchestration.diagonalize import get_expected_footprint
-from skqd_z2lgt.orchestration.io import load_dmrg, load_skqd_result, load_skqd_snapshot
+from skqd_z2lgt.orchestration.io import load_dmrg, load_skqd_result, check_skqd_snapshot
 
 
 @flow(persist_result=True, result_serializer='json')
@@ -240,6 +240,7 @@ async def train_single_generator(parameters: Parameters, idt: int, step: int, ad
 @materialize('file://', asset_deps=[])
 async def diagonalize(parameters: Parameters):
     logger = get_run_logger()
+    diagonalize_mode = 'cr'
     
     # Determine the required number of nodes
     gpu_memory = (await Variable.get(parameters.hpc_profile)).get('gpu_memory_gib', 80) *  (2 ** 30)
@@ -250,26 +251,25 @@ async def diagonalize(parameters: Parameters):
     logger.info('Expected footprint %.2f GiB, memory %.2f GiB per GPU. Sharding over %d devices.',
                 footprint / (2 ** 30), gpu_memory / (2 ** 30), num_devices)
 
-    snapshot_path = Path(parameters.pkgpath) / f'skqd_cr_snapshot.h5'
-    init_iter = 0
-
     user_args = [
         str(Path(__file__).parents[0] / 'diagonalize.py'),
         parameters.pkgpath,
-        'cr'
+        diagonalize_mode
     ]
 
-    if os.path.exists(snapshot_path):
+    init_iter = 0
+    if (snapshot_iter := check_skqd_snapshot(parameters, diagonalize_mode)) is not None:
         user_args += ['--resume']
-        init_iter = load_skqd_snapshot(snapshot_path)[0] + 1
+        init_iter = snapshot_iter + 1
 
-    if num_devices > 1:
-        if (await HPCProfileBlock.load(parameters.hpc_profile)).hpc_target != 'local':
-            user_args += ['--mpi']
-        elif (gpus := (await Variable.get(parameters.hpc_profile)).get('gpus')):
-            if isinstance(gpus, list):
-                gpus = ','.join(f'{i}' for i in gpus)
-            user_args += ['--gpus', gpus]
+    if (gpus := (await Variable.get(parameters.hpc_profile)).get('gpus')):
+        if isinstance(gpus, list):
+            gpus = ','.join(f'{i}' for i in gpus)
+        user_args += ['--gpus', gpus]
+
+    if (num_devices > 1
+        and (await HPCProfileBlock.load(parameters.hpc_profile)).hpc_target != 'local'):
+        user_args += ['--mpi']
 
     expected_time = 200 * (parameters.skqd.max_iterations - init_iter)
     hours, remainder = divmod(expected_time, 3600)
@@ -288,7 +288,7 @@ async def diagonalize(parameters: Parameters):
     if result.exit_status != 0:
         raise RuntimeError(f"Diagonalize job failed: exit_status={result.exit_status}")
 
-    return load_skqd_result(parameters, 'cr')[0][-1]
+    return load_skqd_result(parameters, diagonalize_mode)[0][-1]
 
 
 def run():

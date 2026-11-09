@@ -36,6 +36,8 @@ class ConditionalRBM(nnx.Module):
         params = nnx.split(self, nnx.Param, ...)[1]
         for key, param in params.items():
             getattr(model, key).value = param.value
+        model.rngs.params.count.set_value(self.rngs.params.count.get_value())
+        model.rngs.sample.count.set_value(self.rngs.sample.count.get_value())
 
         model.therm_steps = self.therm_steps
         model.vhat_size = self.vhat_size
