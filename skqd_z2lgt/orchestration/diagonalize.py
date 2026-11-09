@@ -10,6 +10,7 @@ import jax.numpy as jnp
 from flax import nnx
 from rqutils.paulis.symplectic import PauliSumXZ
 from skqd_z2lgt.truncation_sqd import make_pt_core, iterative_sqd
+from skqd_z2lgt.recovery.extensions import vertical_reflection
 from skqd_z2lgt.orchestration.common import make_lattice
 from skqd_z2lgt.orchestration.parameters import Parameters
 from skqd_z2lgt.orchestration.common import make_dual_lattice
@@ -117,8 +118,20 @@ def diagonalize_in_mode(
     )
     logger.info('Generating the PT core (<=%d excitations)', parameters.skqd.pt_core_max)
     pt_core = make_pt_core(plaq_data.shape[-1], parameters.skqd.pt_core_max)
-    logger.info('Starting SKQD iterations. Max iterations %d, convergence tolerance %.1e',
-                parameters.skqd.max_iterations, parameters.skqd.energy_convergence)
+
+    extension_fns = []
+    for fname in parameters.skqd.extensions:
+        logger.info('Setting up CR extension %s', fname)
+        # Potentially set up a dict with factory functions
+        if fname == 'vertical_reflection':
+            extension_fns.append(vertical_reflection(dual_lattice))
+    
+    extension = None
+    if extension_fns:
+        def extension(states_p):
+            for fn in extension_fns:
+                states_p = fn(states_p)
+            return states_p
 
     init = None
     if resume:
@@ -131,6 +144,9 @@ def diagonalize_in_mode(
     def callback(iteration, result, history, gens):
         if jax.process_index() == 0:
             save_skqd_snapshot(parameters, mode, iteration, history[0], history[1], result[2], gens)
+
+    logger.info('Starting SKQD iterations. Max iterations %d, convergence tolerance %.1e',
+                parameters.skqd.max_iterations, parameters.skqd.energy_convergence)
     
     if profile:
         jax.profiler.start_trace(profile)
@@ -139,7 +155,7 @@ def diagonalize_in_mode(
                                             parameters.skqd.carryover,
                                             parameters.skqd.max_iterations,
                                             parameters.skqd.energy_convergence,
-                                            init=init, callback=callback)
+                                            extension=extension, init=init, callback=callback)
     if profile:
         jax.profiler.stop_trace()
 

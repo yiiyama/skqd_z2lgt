@@ -211,10 +211,17 @@ class SKQDParameters(BaseModel):
         title="Perturbative Core Excitations",
         ge=0
     )
+    extensions: list[str] = Field(
+        default=[],
+        description='Configuration recovery extensions. Currently only "vertical_reflection" is' \
+        'implemented.',
+        title='Configuration Recovery Extensions'
+    )
     carryover: int = Field(
         default=4_000_000,
         description="Number of most relevant bitstrings beyond the PT core to retain across" \
         " iterations.",
+        title="Carryover Size",
         ge=0
     )
     max_iterations: int = Field(

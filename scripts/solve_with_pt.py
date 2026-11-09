@@ -12,7 +12,7 @@ from jax.experimental.sparse.linalg import lobpcg_standard
 from heavyhex_qft.triangular_z2 import TriangularZ2Lattice
 from skqd_z2lgt.ground_locg import ground_locg
 from skqd_z2lgt.sqd import get_hamiltonian_arrays, sqd
-from skqd_z2lgt.extensions import _plaquette_excitations
+from skqd_z2lgt.not_used.extensions import _plaquette_excitations
 sys.path.append('/home/iiyama/src/skqd_z2lgt/lib')
 from ising_hamiltonian import make_apply_h
 

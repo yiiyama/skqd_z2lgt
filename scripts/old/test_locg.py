@@ -8,7 +8,7 @@ import jax.numpy as jnp
 from skqd_z2lgt.ground_locg import ground_locg
 from skqd_z2lgt.parameters import Parameters
 from skqd_z2lgt.sqd import get_hamiltonian_arrays, uniquify_states, get_diagonals, get_nondiagonals
-from skqd_z2lgt.extensions import extensions
+from skqd_z2lgt.not_used.extensions import extensions
 from skqd_z2lgt.tasks.common import make_dual_lattice
 from skqd_z2lgt.tasks.preprocess import load_reco
 from skqd_z2lgt.tasks.diagonalize import _prepare_data_and_models, _generate_cr

@@ -16,7 +16,7 @@ from jax.experimental.ode import odeint
 from qiskit.quantum_info import SparsePauliOp
 from heavyhex_qft.triangular_z2 import TriangularZ2Lattice
 from skqd_z2lgt.parameters import Parameters
-from skqd_z2lgt.extensions import denoising, perturbation_2q
+from skqd_z2lgt.not_used.extensions import denoising, perturbation_2q
 from skqd_z2lgt.circuits import make_plaquette_circuits
 from skqd_z2lgt.mwpm import minimum_weight_link_state
 from skqd_z2lgt.sqd import sqd

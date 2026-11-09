@@ -115,7 +115,16 @@ def compose_and_diagonalize(
     return eigval, subspace_dim, states
 
 
-@nnx.jit(static_argnames=['num_gen', 'carryover_size', 'num_iter', 'callback', 'log_level'])
+@nnx.jit(
+    static_argnames=[
+        'num_gen',
+        'carryover_size',
+        'num_iter',
+        'extension',
+        'callback',
+        'log_level'
+    ]
+)
 def iterative_sqd(
     hamiltonian: PauliSumXZ,
     generators: nnx.Module,
@@ -126,6 +135,7 @@ def iterative_sqd(
     carryover_size: int,
     num_iter: int,
     tol: float,
+    extension: Optional[Callable] = None,
     init: Optional[tuple] = None,
     callback: Optional[Callable] = None,
     log_level: int = logging.INFO
@@ -141,6 +151,8 @@ def iterative_sqd(
 
     def run_and_record(_iteration, _history, _carryover, _generators, return_states=True):
         gen_states = _generate_recovery(_generators, syndrome_data, plaq_data, num_gen)
+        if extension is not None:
+            gen_states = extension(gen_states)
         result = compose_and_diagonalize(hamiltonian, gen_states, pt_core, _carryover,
                                          return_best=_carryover.shape[0] if return_states else 0)
         eigval, subspace_dim = result[:2]
