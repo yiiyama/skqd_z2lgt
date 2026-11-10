@@ -209,8 +209,6 @@ if __name__ == '__main__':
     if (jobid := os.getenv('PBS_JOBID')):
         print(f'PBS JOBID {jobid} started at {time.asctime()}')
 
-    if options.gpus:
-        os.environ['CUDA_VISIBLE_DEVICES'] = options.gpus
     os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
     jax.config.update('jax_enable_x64', True)
 
