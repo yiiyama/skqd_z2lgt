@@ -11,37 +11,39 @@ from jax.experimental.mesh_utils import create_hybrid_device_mesh
 LOG = logging.getLogger(__name__)
 
 
-def parse_gpus(gpus: str | list):
-    if isinstance(gpus, list):
+def parse_gpus(gpus: str | list | None, astype=str):
+    if astype is str and isinstance(gpus, list):
         return ','.join(f'{d}' for d in gpus)
+    if astype is list and isinstance(gpus, str):
+        return list(map(int, gpus.split(',')))
     return gpus
 
 
-def distributed_initialize(mpi: bool | str = False, gpus: str | list[int] = None):
+def distributed_initialize(mpi: bool | str = False, gpus: str | list[int] | None = None):
     """Call distributed.initialize() or set CUDA_VISIBLE_DEVICES."""
     if mpi:
         from mpi4py import MPI
-
-        comm = MPI.COMM_WORLD
-        # Split the communicator by shared memory / node
-        local_comm = comm.Split_type(MPI.COMM_TYPE_SHARED)
-        # Get the local rank of the process within its node
-        local_rank = local_comm.Get_rank()
-        # Free the local communicator resources
-        local_comm.Free()
-        if gpus:
-            visible_device = parse_gpus(gpus).split(',')[local_rank]
-        else:
-            # We assume one process per GPU is created
-            visible_device = str(local_rank)
-        os.environ['CUDA_VISIBLE_DEVICES'] = visible_device
+      
         if mpi == 'local':
             comm = MPI.COMM_WORLD
-            jax.distributed.initialize('localhost:10000', comm.Get_size(), comm.Get_rank())
+            # Split the communicator by shared memory / node
+            local_comm = comm.Split_type(MPI.COMM_TYPE_SHARED)
+            # Get the local rank of the process within its node
+            local_rank = local_comm.Get_rank()
+            # Free the local communicator resources
+            local_comm.Free()
+            if gpus:
+                local_device_ids = parse_gpus(gpus, astype=list)[local_rank]
+            else:
+                # We assume one process per GPU is created
+                local_device_ids = [local_rank]
+            LOG.info('Process %d uses GPU %d', jax.process_index(), local_device_ids[0])
+            jax.distributed.initialize('localhost:10000', comm.Get_size(), comm.Get_rank(),
+                                       local_device_ids=local_device_ids)
         else:
-            jax.distributed.initialize(cluster_detection_method="mpi4py")
+            jax.distributed.initialize(cluster_detection_method="mpi4py",
+                                       local_device_ids=parse_gpus(gpus, astype=list))
         
-        LOG.info('Process %d uses GPU %s', jax.process_index(), visible_device)
         if jax.process_index() == 0:
             LOG.info('All device slices: %s', [d.slice_index for d in jax.devices()])
     
