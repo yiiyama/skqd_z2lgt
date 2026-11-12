@@ -1,11 +1,10 @@
 """Compose the Krylov circuits and run the quantum runtime sampler."""
 import os
 import logging
-from pathlib import Path
 from typing import Optional
 from qiskit.circuit import QuantumCircuit
 from qiskit.transpiler import Target
-from qiskit_ibm_runtime import QiskitRuntimeService, IBMBackend, Batch
+from qiskit_ibm_runtime import QiskitRuntimeService
 from qiskit_ibm_runtime.executor_sampler import Sampler
 from skqd_z2lgt.circuits import make_step_circuits, compose_trotter_circuits
 from skqd_z2lgt.utils import minimum_weight_link_state
@@ -60,62 +59,32 @@ def get_trotter_circuits(
     return layout, all_circuits
 
 
-def filter_out_completed(
+def submit_sampler_job(
     parameters: Parameters,
-    circuits: dict[tuple[str, int, int], QuantumCircuit],
-    task_map: dict[str, list],
-    service: Optional[QiskitRuntimeService] = None,
-    logger: Optional[logging.Logger] = None
+    circuit: QuantumCircuit,
+    etype: str,
+    idt: int,
+    step: int,
+    run_name: Optional[str] = None
+) -> str:
+    job_tags = [f'{etype}_dt{idt}_k{step}']
+    if run_name:
+        job_tags.append(run_name)
+    sampler = Sampler(options={'environment': {'job_tags': job_tags}})
+    shots = getattr(parameters.runtime, f'shots_{etype}')
+    job = sampler.run([circuit], shots=shots)
+    return job.job_id()
+
+
+def retrieve_samples(
+    parameters: Parameters,
+    job_id: str,
+    etype: str,
+    idt: int,
+    step: int,
+    service: Optional[QiskitRuntimeService] = None
 ):
-    """Drop circuits that already have sampled results locally or in the cloud."""
     if service is None:
         service = QiskitRuntimeService()
-
-    logger = logger or logging.getLogger(__name__)
-    
-    raw_data_path = Path(parameters.pkgpath) / 'data/raw'
-    # Drop circuits whose raw data already exist
-    for etype, idt, step in list(circuits.keys()):
-        if os.path.exists(raw_data_path / f'{etype}_dt{idt}_k{step}.h5'):
-            logger.info('Raw data %s_dt%d_k%d exists', etype, idt, step)
-            circuits.pop((etype, idt, step))
-
-    # Check the existing task map and fetch missing results. Drop circuits whose results are
-    # successfully recovered
-    for job_id, key in task_map.items():
-        key = tuple(key)
-        if key in circuits:
-            logger.info('Fetching job result for %s_dt%d_k%d', etype, idt, step)    
-            job = service.job(job_id)
-            result = job.result()
-            save_raw(parameters, result[0].data.c, *key)
-            circuits.pop(key)
-
-    return circuits
-
-
-def run_sampler(
-    parameters: Parameters,
-    circuits: dict[tuple[str, int, int], QuantumCircuit],
-    backend: IBMBackend,
-    logger: Optional[logging.Logger] = None
-):
-    """Submit sampler jobs and fetch the results."""
-    logger = logger or logging.getLogger(__name__)
-
-    logger.info('Submitting jobs for %d circuits', len(circuits))
-
-    jobs = {}
-    with Batch(backend=backend):
-        sampler = Sampler()
-        for (etype, idt, step), circuit in circuits.items():
-            shots = getattr(parameters.runtime, f'shots_{etype}')
-            job = sampler.run([circuit], shots=shots)
-            jobs[(etype, idt, step)] = job
-
-    task_map = {}
-    for (etype, idt, step), job in jobs.items():
-        save_raw(parameters, job.result()[0].data.c, etype, idt, step)
-        task_map[job.job_id()] = [etype, idt, step]
-
-    return task_map
+    job = service.job(job_id)
+    save_raw(parameters, job.result()[0].data.c, etype, idt, step)

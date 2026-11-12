@@ -2,14 +2,16 @@ import os
 import asyncio
 from pathlib import Path
 import logging
-import json
 import math
 import hashlib
-from prefect import flow, get_run_logger
+from qiskit import QuantumCircuit
+from qiskit_ibm_runtime import Batch, QiskitRuntimeService
+from prefect import flow, get_run_logger, task, runtime
 from prefect.assets import materialize
 from prefect.cache_policies import CacheKeyFnPolicy
 from prefect.context import get_run_context
 from prefect.filesystems import LocalFileSystem
+from prefect.transactions import CommitMode, transaction
 from prefect.variables import Variable
 from qcsc_prefect_executor.from_blocks import run_job_from_blocks
 from qcsc_prefect_blocks.common import HPCProfileBlock
@@ -18,8 +20,8 @@ from skqd_z2lgt.orchestration.parameters import Parameters
 from skqd_z2lgt.orchestration.open_output import open_output, open_from_yaml
 from skqd_z2lgt.orchestration.sample_quantum import (
     get_trotter_circuits,
-    filter_out_completed,
-    run_sampler
+    submit_sampler_job,
+    retrieve_samples
 )
 from skqd_z2lgt.orchestration.diagonalize import get_expected_footprint
 from skqd_z2lgt.orchestration.io import load_dmrg, load_skqd_result, check_skqd_snapshot
@@ -42,6 +44,9 @@ async def skqd_z2lgt(parameters: Parameters) -> float:
     crbm_filenames = [f'crbm/{s}.h5' for s in suffices]
 
     result_storage = await get_result_storage(parameters)
+    # assert_assets removes cache keys, so we separate the key storage with the cache payload
+    # storage. This doesn't really matter as payloads are likely invalid anyway in situations where
+    # cache keys should be removed.
     cache_policy = CacheKeyFnPolicy(cache_key_fn=assert_assets).configure(
         key_storage=Path(result_storage.basepath) / 'cache_keys'
     )
@@ -133,7 +138,7 @@ async def dmrg(parameters: Parameters):
 @materialize('file://')
 async def sample_quantum(parameters: Parameters):
     logger = get_run_logger()
-    context = get_run_context()
+    task_instance = get_run_context().task
 
     runtime_config = await QiskitRuntimeConfig.load(parameters.runtime.config_block)
     # QiskitRuntimeConfig.get_backend() currently does not support use_fractional_gates option, so
@@ -146,16 +151,66 @@ async def sample_quantum(parameters: Parameters):
         with open(Path(parameters.pkgpath) / 'parameters.json', 'w', encoding='utf-8') as out:
             out.write(parameters.model_dump_json())
 
-    try:
-        with open(Path(context.result_store.result_storage.basepath) / context.task.name) as src:
-            task_map = json.read(src)
-    except FileNotFoundError:
-        task_map = {}
+    # Trivial cache policy that uses the task name as the cache key
+    cache_policy = CacheKeyFnPolicy(cache_key_fn=lambda ctx, ipt: ctx.task.name).configure(
+        key_storage=Path(task_instance.result_storage.basepath) / 'cache_keys'
+    )
 
-    circuits = filter_out_completed(parameters, circuits, task_map, service, logger=logger)
-    task_map |= run_sampler(parameters, circuits, backend, logger=logger)
+    job_ids = {}
+    with Batch(backend=backend):
+        for (etype, idt, step), circuit in circuits.items():
+            with transaction(commit_mode=CommitMode.EAGER):
+                job_ids[(etype, idt, step)] = await submit_quantum_job.with_options(
+                    cache_policy=cache_policy,
+                    name=f'submit_quantum_job_{etype}_dt{idt}_k{step}',
+                    result_storage=task_instance.result_storage
+                )(parameters, circuit, etype, idt, step)
+
+    futures = {}
+    for (etype, idt, step), job_id in job_ids.items():
+        with transaction(commit_mode=CommitMode.EAGER):
+            fut = retrieve_quantum_result.with_options(
+                    assets=[(Path(parameters.pkgpath) / f'data/raw/{etype}_dt{idt}_k{step}.h5').as_uri()],
+                    cache_policy=task_instance.cache_policy,
+                    name=f'retrieve_quantum_result_{etype}_dt{idt}_k{step}',
+                    result_storage=task_instance.result_storage
+                ).submit(parameters, job_id, etype, idt, step, service)
+        futures[(etype, idt, step)] = fut
+
+    exit_statuses = {key: fut.result() for key, fut in futures.items()}
+    if any(s != 0 for s in exit_statuses.values()):
+        raise RuntimeError(f"Sample quantum job failed: exit_statuses={exit_statuses}")
     
-    return task_map
+    return 0
+
+
+@task
+async def submit_quantum_job(
+    parameters: Parameters,
+    circuit: QuantumCircuit,
+    etype: str,
+    idt: int,
+    step: int
+) -> str:
+    logger = get_run_logger()
+    job_id = submit_sampler_job(parameters, circuit, etype, idt, step, runtime.flow_run.name)
+    logger.info('Runtime job (%s, %d, %d) -> %s', etype, idt, step, job_id)
+    return job_id
+
+
+@materialize('file://')
+async def retrieve_quantum_result(
+    parameters: Parameters,
+    job_id: str,
+    etype: str,
+    idt: int,
+    step: int,
+    service: QiskitRuntimeService
+):
+    logger = get_run_logger()
+    retrieve_samples(parameters, job_id, etype, idt, step, service=service)
+    logger.info('Retrieved samples for (%s, %d, %d)', etype, idt, step)
+    return 0
 
 
 @materialize('file://', asset_deps=[])
@@ -178,7 +233,7 @@ async def preprocess(parameters: Parameters):
 @materialize('file://', asset_deps=[])
 async def train_generators(parameters: Parameters):
     logger = get_run_logger()
-    task = get_run_context().task
+    task_instance = get_run_context().task
 
     gpus = (await Variable.get(parameters.hpc_profile)).get('gpus')
     if isinstance(gpus, str):
@@ -197,14 +252,15 @@ async def train_generators(parameters: Parameters):
                 add_args += ['--gpu', str(gpus[igpu])]
                 igpu = (igpu + 1) % len(gpus)
 
-            future = train_single_generator.with_options(
-                assets=[(Path(parameters.pkgpath) / f'crbm/dt{idt}_k{step}.h5').as_uri()],
-                asset_deps=[(Path(parameters.pkgpath) / f'data/reco/dt{idt}_k{step}.h5').as_uri()],
-                cache_policy=task.cache_policy,
-                name=f'train_single_generator_dt{idt}_k{step}',
-                result_storage=task.result_storage
-            ).submit(parameters, idt, step, add_args)
-            futures[(idt, step)] = future
+            with transaction(commit_mode=CommitMode.EAGER):
+                fut = train_single_generator.with_options(
+                    assets=[(Path(parameters.pkgpath) / f'crbm/dt{idt}_k{step}.h5').as_uri()],
+                    asset_deps=[(Path(parameters.pkgpath) / f'data/reco/dt{idt}_k{step}.h5').as_uri()],
+                    cache_policy=task_instance.cache_policy,
+                    name=f'train_single_generator_dt{idt}_k{step}',
+                    result_storage=task_instance.result_storage
+                ).submit(parameters, idt, step, add_args)
+            futures[(idt, step)] = fut
 
     exit_statuses = {key: fut.result() for key, fut in futures.items()}
     if any(s != 0 for s in exit_statuses.values()):
