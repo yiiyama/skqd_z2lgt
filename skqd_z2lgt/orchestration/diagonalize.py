@@ -176,6 +176,9 @@ def get_expected_footprint(parameters: Parameters):
     """Compute the expected device RAM usage in bytes."""
     gen_size = (len(parameters.circuit.dts) * len(parameters.circuit.sampled_steps)
                 * parameters.runtime.shots_exp * parameters.skqd.num_gen)
+    for fname in parameters.skqd.extensions:
+        if fname == 'vertical_reflection':
+            gen_size *= 2
     num_p = make_lattice(parameters).num_active_plaquettes
     pt_core_size = sum(math.comb(num_p, i) for i in range(parameters.skqd.pt_core_max + 1))
     # Size of the SQD subspace N
