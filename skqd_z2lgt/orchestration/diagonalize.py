@@ -135,15 +135,22 @@ def diagonalize_in_mode(
 
     init = None
     if resume:
-        snapshot = load_skqd_snapshot(parameters, mode)
-        init = (snapshot[0] + 1, (snapshot[1], snapshot[2]), snapshot[3])
-        generators.rngs.sample.count.set_value(snapshot[4])
+        iteration, history, carryover, counts = load_skqd_snapshot(parameters, mode)
+        # If max_iterations has been updated, resize the arrays and re-initialize the snapshot file
+        if history[0].shape[0] != parameters.skqd.max_iterations + 1:
+            history = tuple(np.resize(rec, parameters.skqd.max_iterations + 1) for rec in history)
+            if jax.process_index() == 0:
+                initialize_skqd_snapshot(parameters, mode)
+                save_skqd_snapshot(parameters, mode, iteration, history, carryover, counts)
+        init = (iteration + 1, history, carryover)
+        generators.rngs.sample.count.set_value(counts)
     elif jax.process_index() == 0:
         initialize_skqd_snapshot(parameters, mode)
 
     def callback(iteration, result, history, gens):
         if jax.process_index() == 0:
-            save_skqd_snapshot(parameters, mode, iteration, history[0], history[1], result[2], gens)
+            save_skqd_snapshot(parameters, mode, iteration, history, result[2],
+                               gens.rngs.sample.count.get_value())
 
     logger.info('Starting SKQD iterations. Max iterations %d, convergence tolerance %.1e',
                 parameters.skqd.max_iterations, parameters.skqd.energy_convergence)

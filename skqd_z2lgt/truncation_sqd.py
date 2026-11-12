@@ -141,12 +141,11 @@ def iterative_sqd(
     log_level: int = logging.INFO
 ):
     def cond_fn(val):
-        iteration, history = val[:2]
-        not_converged = jax.lax.cond(
-            iteration < 2,
-            lambda: True,
-            lambda: history[0][iteration - 2] - history[0][iteration - 1] > tol
-        )
+        iteration, (energies, _) = val[:2]
+        not_converged = (energies.at[iteration - 2].get(mode='fill', wrap_negative_indices=False,
+                                                        fill_value=jnp.inf)
+                         - energies.at[iteration - 1].get(mode='fill', wrap_negative_indices=False,
+                                                          fill_value=-jnp.inf)) > tol
         return jnp.logical_and(iteration < num_iter, not_converged)
 
     def run_and_record(_iteration, _history, _carryover, _generators, return_states=True):
@@ -181,5 +180,14 @@ def iterative_sqd(
         )
     init += (generators,)
     iteration, history, selected_states, generators = nnx.while_loop(cond_fn, body_fn, init)
+
+    if log_level <= logging.INFO:
+        jax.debug.print('Converged: {} == {} or {} - {} <= {}',
+                        iteration, num_iter,
+                        history[0].at[iteration - 2].get(mode='fill', wrap_negative_indices=False,
+                                                         fill_value=jnp.inf),
+                        history[0].at[iteration - 1].get(mode='fill', wrap_negative_indices=False,
+                                                         fill_value=-jnp.inf),
+                        tol)
 
     return run_and_record(iteration, history, selected_states, generators, return_states=False)

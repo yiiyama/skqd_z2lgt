@@ -262,7 +262,7 @@ def load_skqd_snapshot(
         carryover = source['carryover'][:]
         generator_counts = source['generator_counts'][:]
 
-    return iteration, energies, subspace_dims, carryover, generator_counts
+    return iteration, (energies, subspace_dims), carryover, generator_counts
 
 
 def check_skqd_snapshot(
@@ -281,18 +281,17 @@ def save_skqd_snapshot(
     parameters: Parameters,
     mode: str,
     iteration: int,
-    energies: np.ndarray,
-    subspace_dims: np.ndarray,
+    history: tuple[np.ndarray, ...],
     carryover: np.ndarray,
-    generators: ConditionalRBM
+    generator_counts: np.ndarray
 ):
     path = Path(parameters.pkgpath) / f'skqd_{mode}_snapshot.h5'
     with h5py.File(path, 'a', libver='latest') as out:
         out['iteration'][()] = iteration
-        out['energies'][:] = energies
-        out['subspace_dims'][:] = subspace_dims
+        out['energies'][:] = history[0]
+        out['subspace_dims'][:] = history[1]
         out['carryover'][:] = carryover
-        out['generator_counts'][:] = generators.rngs.sample.count.get_value()
+        out['generator_counts'][:] = generator_counts
 
 
 def load_projected_hamiltonian(source: h5py.Group):
