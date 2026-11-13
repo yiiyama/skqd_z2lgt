@@ -10,6 +10,7 @@ import jax.numpy as jnp
 from flax import nnx
 from rqutils.paulis.symplectic import PauliSumXZ
 from skqd_z2lgt.truncation_sqd import make_pt_core, iterative_sqd
+from skqd_z2lgt.recovery.crbm import ConditionalRBM
 from skqd_z2lgt.recovery.extensions import vertical_reflection
 from skqd_z2lgt.orchestration.common import make_lattice
 from skqd_z2lgt.orchestration.parameters import Parameters
@@ -21,7 +22,7 @@ from skqd_z2lgt.orchestration.io import (
     save_skqd_snapshot,
     load_skqd_snapshot
 )
-from skqd_z2lgt.orchestration.train_generator import load_model
+from skqd_z2lgt.orchestration.train_generator import load_model, new_model
 
 
 def prepare_data(parameters: Parameters) -> tuple[jax.Array, jax.Array]:
@@ -48,63 +49,51 @@ def prepare_data(parameters: Parameters) -> tuple[jax.Array, jax.Array]:
     return syndrome_data, plaq_data
 
 
-def prepare_crbm_models(parameters: Parameters) -> nnx.Module:
+def prepare_crbm_models(parameters: Parameters) -> ConditionalRBM:
     """Return stacked (as pytrees) CRBM models."""
     crbm_models = []
     for idt in range(len(parameters.circuit.dts)):
         for step in parameters.circuit.sampled_steps:
-            crbm_models.append(
-                load_model(parameters, idt, step)
-            )
+            crbm_models.append(load_model(parameters, idt, step))
 
     crbm_models = jax.tree.map(lambda *xs: jnp.stack(xs), *crbm_models)
     return crbm_models
 
 
-class RandomExcitation(nnx.Module):
-    """Random plaquette excitation generator."""
-    def __init__(self, mean_activation: np.ndarray, *, rngs: nnx.Rngs):
-        self.probs = nnx.Param(mean_activation)
-        self.rngs = rngs
-
-    def sample(self, batch: NDArray, size: int) -> jax.Array:
-        shape = (size, batch.shape[0]) + self.probs.shape
-        uvalues = jax.random.uniform(self.rngs.sample(), shape)
-        return jnp.asarray(uvalues < self.probs[...], dtype=np.uint8)
-
-
-def prepare_rand_generators(parameters: Parameters) -> RandomExcitation:
+def prepare_rand_generators(parameters: Parameters) -> ConditionalRBM:
     """Return stacked (as pytrees) RandomExcitation generators."""
     ref_data = load_reco(parameters, etype='ref')
-    generators = []
-    seed = 1234
+    crbm_models = []
     for idt in range(len(parameters.circuit.dts)):
-        for istep in range(len(parameters.circuit.sampled_steps)):
-            rngs = nnx.Rngs(sample=seed)
-            seed += 1
+        for istep, step in enumerate(parameters.circuit.sampled_steps):
+            model = new_model(parameters, idt, step, num_h=1)
+            for pname in ['weights_vu', 'weights_hu', 'weights_hv', 'bias_h']:
+                params = getattr(model, pname)
+                params.set_value(jnp.zeros_like(params.get_value()))
             mean_activation = np.mean(ref_data[idt][istep][1], axis=0)
-            generators.append(RandomExcitation(mean_activation, rngs=rngs))
+            model.bias_v.set_value(-jnp.log(1. / mean_activation - 1.))
+            model.therm_steps = 0
+            crbm_models.append(model)
 
-    generators = jax.tree.map(lambda *xs: jnp.stack(xs), *generators)
-    return generators
+    crbm_models = jax.tree.map(lambda *xs: jnp.stack(xs), *crbm_models)
+    return crbm_models
 
 
 def diagonalize_in_mode(
     parameters: Parameters,
     mode: str,  # 'cr' or 'rn'
     resume: bool = False,
+    max_iterations: Optional[int] = None,
     profile: Optional[str] = None,    
     logger: Optional[logging.Logger] = None
 ) -> float:
     """Project and diagonalize the Hamiltonian with configuration recovery or random bitflips."""
     logger = logger or logging.getLogger(__name__)
+    max_iterations = max_iterations or parameters.skqd.max_iterations
 
     def loginfo(msg, *args):
         if jax.process_index() == 0:
             logger.info(msg, *args)
-
-    if mode != 'cr':
-        raise NotImplementedError('Only cr mode is supported')
 
     loginfo('Padding and stacking data')
     syndrome_data, plaq_data = prepare_data(parameters)
@@ -142,8 +131,8 @@ def diagonalize_in_mode(
     if resume:
         iteration, history, carryover, counts = load_skqd_snapshot(parameters, mode)
         # If max_iterations has been updated, resize the arrays and re-initialize the snapshot file
-        if history[0].shape[0] != parameters.skqd.max_iterations + 1:
-            history = tuple(np.resize(rec, parameters.skqd.max_iterations + 1) for rec in history)
+        if history[0].shape[0] != max_iterations + 1:
+            history = tuple(np.resize(rec, max_iterations + 1) for rec in history)
             if jax.process_index() == 0:
                 initialize_skqd_snapshot(parameters, mode)
                 save_skqd_snapshot(parameters, mode, iteration, history, carryover, counts)
@@ -158,14 +147,13 @@ def diagonalize_in_mode(
                                gens.rngs.sample.count.get_value())
 
     loginfo('Starting SKQD iterations. Max iterations %d, convergence tolerance %.1e',
-            parameters.skqd.max_iterations, parameters.skqd.energy_convergence)
+            max_iterations, parameters.skqd.energy_convergence)
     
     if profile:
         jax.profiler.start_trace(profile)
     niter, history = iterative_sqd(hamiltonian, generators, syndrome_data, plaq_data,
                                    parameters.skqd.num_gen, pt_core, parameters.skqd.carryover,
-                                   parameters.skqd.max_iterations,
-                                   parameters.skqd.energy_convergence,
+                                   max_iterations, parameters.skqd.energy_convergence,
                                    extension=extension, init=init, callback=callback)
     if profile:
         jax.profiler.stop_trace()
@@ -213,6 +201,7 @@ if __name__ == '__main__':
     parser.add_argument('pkgpath')
     parser.add_argument('mode')
     parser.add_argument('--resume', action='store_true')
+    parser.add_argument('--niter', type=int)
     parser.add_argument('--mpi', action='store_true')
     parser.add_argument('--gpus', help='CUDA_VISIBLE_DEVICES')
     parser.add_argument('--profile')

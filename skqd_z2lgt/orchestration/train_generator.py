@@ -69,16 +69,18 @@ def load_model(
 def new_model(
     parameters: Parameters,
     idt: int,
-    step: int
+    step: int,
+    num_h: Optional[int] = None
 ) -> ConditionalRBM:
     lattice = make_lattice(parameters)
     num_v = lattice.num_active_plaquettes
     num_u = lattice.num_vertices + lattice.num_plaquettes - lattice.num_active_plaquettes
+    num_h = num_h or parameters.crbm.num_h
     istep = parameters.circuit.sampled_steps.index(step)
     seed_params = parameters.crbm.seed_params + idt * len(parameters.circuit.sampled_steps) + istep
     seed_sample = parameters.crbm.seed_sample + idt * len(parameters.circuit.sampled_steps) + istep
     rngs = nnx.Rngs(params=seed_params, sample=seed_sample)
-    return ConditionalRBM(num_u, num_v, parameters.crbm.num_h, rngs=rngs)
+    return ConditionalRBM(num_u, num_v, num_h, rngs=rngs)
 
 
 def best_model_cond(iepoch, records):
