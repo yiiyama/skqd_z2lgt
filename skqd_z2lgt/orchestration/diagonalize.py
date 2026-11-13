@@ -98,30 +98,35 @@ def diagonalize_in_mode(
 ) -> float:
     """Project and diagonalize the Hamiltonian with configuration recovery or random bitflips."""
     logger = logger or logging.getLogger(__name__)
+
+    def loginfo(msg, *args):
+        if jax.process_index() == 0:
+            logger.info(msg, *args)
+
     if mode != 'cr':
         raise NotImplementedError('Only cr mode is supported')
 
-    logger.info('Padding and stacking data')
+    loginfo('Padding and stacking data')
     syndrome_data, plaq_data = prepare_data(parameters)
     if mode == 'cr':
-        logger.info('Loading and stacking CRBM models')
+        loginfo('Loading and stacking CRBM models')
         generators = prepare_crbm_models(parameters)
     else:
-        logger.info('Using the mean of reference circuit data as single-plaquette probability')
+        loginfo('Using the mean of reference circuit data as single-plaquette probability')
         generators = prepare_rand_generators(parameters)
 
-    logger.info('Setting up the Hamiltonian')
+    loginfo('Setting up the Hamiltonian')
     dual_lattice = make_dual_lattice(parameters)
     hamiltonian = PauliSumXZ.from_paulisum(
         dual_lattice.make_hamiltonian(parameters.lgt.plaquette_energy),
         add_padding=True
     )
-    logger.info('Generating the PT core (<=%d excitations)', parameters.skqd.pt_core_max)
+    loginfo('Generating the PT core (<=%d excitations)', parameters.skqd.pt_core_max)
     pt_core = make_pt_core(plaq_data.shape[-1], parameters.skqd.pt_core_max)
 
     extension_fns = []
     for fname in parameters.skqd.extensions:
-        logger.info('Setting up CR extension %s', fname)
+        loginfo('Setting up CR extension %s', fname)
         # Potentially set up a dict with factory functions
         if fname == 'vertical_reflection':
             extension_fns.append(vertical_reflection(dual_lattice))
@@ -152,22 +157,26 @@ def diagonalize_in_mode(
             save_skqd_snapshot(parameters, mode, iteration, history, result[2],
                                gens.rngs.sample.count.get_value())
 
-    logger.info('Starting SKQD iterations. Max iterations %d, convergence tolerance %.1e',
-                parameters.skqd.max_iterations, parameters.skqd.energy_convergence)
+    loginfo('Starting SKQD iterations. Max iterations %d, convergence tolerance %.1e',
+            parameters.skqd.max_iterations, parameters.skqd.energy_convergence)
     
     if profile:
         jax.profiler.start_trace(profile)
-    energies, subspace_dims = iterative_sqd(hamiltonian, generators, syndrome_data, plaq_data,
-                                            parameters.skqd.num_gen, pt_core,
-                                            parameters.skqd.carryover,
-                                            parameters.skqd.max_iterations,
-                                            parameters.skqd.energy_convergence,
-                                            extension=extension, init=init, callback=callback)
+    niter, history = iterative_sqd(hamiltonian, generators, syndrome_data, plaq_data,
+                                   parameters.skqd.num_gen, pt_core, parameters.skqd.carryover,
+                                   parameters.skqd.max_iterations,
+                                   parameters.skqd.energy_convergence,
+                                   extension=extension, init=init, callback=callback)
     if profile:
         jax.profiler.stop_trace()
 
+    energies = history[0][:niter]
+    subspace_dims = history[1][:niter]
     if jax.process_index() == 0:
         save_skqd_result(parameters, mode, energies, subspace_dims)
+
+    loginfo('Diagonalization completed after %d iterations. Final energy %f, subspace dim %d',
+            niter, energies[-1], subspace_dims[-1])
 
     return float(energies[-1])
 

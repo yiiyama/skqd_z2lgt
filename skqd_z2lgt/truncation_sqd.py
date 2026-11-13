@@ -190,4 +190,5 @@ def iterative_sqd(
                                                          fill_value=-jnp.inf),
                         tol)
 
-    return run_and_record(iteration, history, selected_states, generators, return_states=False)
+    history = run_and_record(iteration, history, selected_states, generators, return_states=False)
+    return iteration + 1, history
