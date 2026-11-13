@@ -67,12 +67,17 @@ def load_model(
 
 
 def new_model(
-    parameters: Parameters
+    parameters: Parameters,
+    idt: int,
+    step: int
 ) -> ConditionalRBM:
     lattice = make_lattice(parameters)
     num_v = lattice.num_active_plaquettes
     num_u = lattice.num_vertices + lattice.num_plaquettes - lattice.num_active_plaquettes
-    rngs = nnx.Rngs(params=parameters.crbm.seed_params, sample=parameters.crbm.seed_sample)
+    istep = parameters.circuit.sampled_steps.index(step)
+    seed_params = parameters.crbm.seed_params + idt * len(parameters.circuit.sampled_steps) + istep
+    seed_sample = parameters.crbm.seed_sample + idt * len(parameters.circuit.sampled_steps) + istep
+    rngs = nnx.Rngs(params=seed_params, sample=seed_sample)
     return ConditionalRBM(num_u, num_v, parameters.crbm.num_h, rngs=rngs)
 
 
@@ -105,7 +110,7 @@ def train_single_model(
     cparams = parameters.crbm
 
     data = load_reco(parameters, etype='ref', idt=idt, step=step)
-    model = new_model(parameters)
+    model = new_model(parameters, idt, step)
     loss_fn_train = partial(cd_meanloss, impl='sum', unroll=20)
     loss_fn_test = partial(cd_meanloss, impl='tensordot', unroll=50)
     metrics_test = {'success_rate': (nnx.metrics.Average, success_rate(parameters.skqd.num_gen))}
