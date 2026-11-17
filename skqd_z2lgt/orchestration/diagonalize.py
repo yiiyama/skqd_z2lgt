@@ -4,10 +4,8 @@ import logging
 import math
 from typing import Optional
 import numpy as np
-from numpy.typing import NDArray
 import jax
 import jax.numpy as jnp
-from flax import nnx
 from rqutils.paulis.symplectic import PauliSumXZ
 from skqd_z2lgt.truncation_sqd import make_pt_core, iterative_sqd
 from skqd_z2lgt.recovery.crbm import ConditionalRBM
@@ -23,6 +21,10 @@ from skqd_z2lgt.orchestration.io import (
     load_skqd_snapshot
 )
 from skqd_z2lgt.orchestration.train_generator import load_model, new_model
+try:
+    from mpi4py import MPI
+except (ImportError, RuntimeError):
+    MPI = None
 
 
 def prepare_data(parameters: Parameters) -> tuple[jax.Array, jax.Array]:
@@ -79,20 +81,37 @@ def prepare_rand_generators(parameters: Parameters) -> ConditionalRBM:
     return crbm_models
 
 
+def load_snapshot(parameters: Parameters, mode: str, generators: ConditionalRBM):
+    if MPI and jax.process_index() != 0:
+        MPI.COMM_WORLD.bcast(None, root=0)
+    iteration, history, carryover, counts = load_skqd_snapshot(parameters, mode)
+    # If max_iterations has been updated, resize the arrays and re-initialize the snapshot file
+    if jax.process_index() == 0:
+        if history[0].shape[0] != parameters.skqd.max_iterations + 1:
+            history = tuple(np.resize(rec, parameters.skqd.max_iterations + 1)
+                            for rec in history)
+            initialize_skqd_snapshot(parameters, mode)
+            save_skqd_snapshot(parameters, mode, iteration, history, carryover, counts)
+        if MPI and MPI.COMM_WORLD.Get_size() != 1:
+            MPI.COMM_WORLD.bcast('ready', root=0)
+        
+    generators.rngs.sample.count.set_value(counts)
+    return (iteration + 1, history, carryover)
+
+
 def diagonalize_in_mode(
     parameters: Parameters,
-    mode: str,  # 'cr' or 'rn'
+    mode: str,  # 'cr' or 'lo'
     resume: bool = False,
-    max_iterations: Optional[int] = None,
     profile: Optional[str] = None,    
     logger: Optional[logging.Logger] = None
 ) -> float:
     """Project and diagonalize the Hamiltonian with configuration recovery or random bitflips."""
     logger = logger or logging.getLogger(__name__)
-    max_iterations = max_iterations or parameters.skqd.max_iterations
+    proc_id = jax.process_index()
 
     def loginfo(msg, *args):
-        if jax.process_index() == 0:
+        if proc_id == 0:
             logger.info(msg, *args)
 
     loginfo('Padding and stacking data')
@@ -127,40 +146,33 @@ def diagonalize_in_mode(
                 states_p = fn(states_p)
             return states_p
 
-    init = None
-    if resume:
-        iteration, history, carryover, counts = load_skqd_snapshot(parameters, mode)
-        # If max_iterations has been updated, resize the arrays and re-initialize the snapshot file
-        if history[0].shape[0] != max_iterations + 1:
-            history = tuple(np.resize(rec, max_iterations + 1) for rec in history)
-            if jax.process_index() == 0:
-                initialize_skqd_snapshot(parameters, mode)
-                save_skqd_snapshot(parameters, mode, iteration, history, carryover, counts)
-        init = (iteration + 1, history, carryover)
-        generators.rngs.sample.count.set_value(counts)
-    elif jax.process_index() == 0:
-        initialize_skqd_snapshot(parameters, mode)
-
     def callback(iteration, result, history, gens):
-        if jax.process_index() == 0:
+        if proc_id == 0:
             save_skqd_snapshot(parameters, mode, iteration, history, result[2],
                                gens.rngs.sample.count.get_value())
 
+    if resume:
+        init = load_snapshot(parameters, mode, generators)
+    else:
+        initialize_skqd_snapshot(parameters, mode)
+        init = None
+
     loginfo('Starting SKQD iterations. Max iterations %d, convergence tolerance %.1e',
-            max_iterations, parameters.skqd.energy_convergence)
+            parameters.skqd.max_iterations, parameters.skqd.energy_convergence)
     
     if profile:
         jax.profiler.start_trace(profile)
     niter, history = iterative_sqd(hamiltonian, generators, syndrome_data, plaq_data,
                                    parameters.skqd.num_gen, pt_core, parameters.skqd.carryover,
-                                   max_iterations, parameters.skqd.energy_convergence,
+                                   parameters.skqd.max_iterations,
+                                   parameters.skqd.energy_convergence,
                                    extension=extension, init=init, callback=callback)
     if profile:
         jax.profiler.stop_trace()
 
     energies = history[0][:niter]
     subspace_dims = history[1][:niter]
-    if jax.process_index() == 0:
+    if proc_id == 0:
         save_skqd_result(parameters, mode, energies, subspace_dims)
 
     loginfo('Diagonalization completed after %d iterations. Final energy %f, subspace dim %d',
@@ -221,5 +233,7 @@ if __name__ == '__main__':
     jax.config.update('jax_enable_x64', True)
 
     direct_sharding(options.mpi, options.gpus)
-    diagonalize_in_mode(open_output(options.pkgpath), options.mode, resume=options.resume,
-                        profile=options.profile)
+    parameters = open_output(options.pkgpath)
+    if options.niter:
+        parameters.skqd.max_iterations = options.niter
+    diagonalize_in_mode(parameters, options.mode, resume=options.resume, profile=options.profile)

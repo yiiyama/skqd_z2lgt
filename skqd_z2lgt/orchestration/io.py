@@ -231,7 +231,8 @@ def save_skqd_result(
 
 def initialize_skqd_snapshot(
     parameters: Parameters,
-    mode: str
+    mode: str,
+    backup: bool = True
 ):
     """Create the snapshot file."""
     num_plaquettes = make_lattice(parameters).num_active_plaquettes
@@ -239,6 +240,13 @@ def initialize_skqd_snapshot(
     num_generators = len(parameters.circuit.dts) * len(parameters.circuit.sampled_steps)
 
     path = Path(parameters.pkgpath) / f'skqd_{mode}_snapshot.h5'
+    if backup and os.path.exists(path):
+        backup_path = str(path).replace('.h5', '_backup1.h5')
+        ibk = 1        
+        while os.path.exists(backup_path):
+            backup_path = backup_path.replace(f'_backup{ibk}.h5', f'_backup{ibk + 1}.h5')
+        os.rename(path, backup_path)
+
     with h5py.File(path, 'w', libver='latest') as out:
         out.create_dataset('iteration', data=np.array(-1, dtype=np.int32))
         out.create_dataset('energies',
