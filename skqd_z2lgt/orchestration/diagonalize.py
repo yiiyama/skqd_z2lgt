@@ -6,8 +6,15 @@ from typing import Optional
 import numpy as np
 import jax
 import jax.numpy as jnp
+from flax import nnx
 from rqutils.paulis.symplectic import PauliSumXZ
-from skqd_z2lgt.truncation_sqd import make_pt_core, iterative_sqd
+from skqd_z2lgt.truncation_sqd import (
+    ProductStateSampler,
+    make_pt_core,
+    generate_recovery,
+    generate_random,
+    iterative_sqd
+)
 from skqd_z2lgt.recovery.crbm import ConditionalRBM
 from skqd_z2lgt.recovery.extensions import vertical_reflection
 from skqd_z2lgt.orchestration.common import make_lattice
@@ -51,6 +58,15 @@ def prepare_data(parameters: Parameters) -> tuple[jax.Array, jax.Array]:
     return syndrome_data, plaq_data
 
 
+def prepare_shape_struct(parameters: Parameters) -> tuple[jax.Array]:
+    """Prepare a dummy array to extract the shape from."""
+    shots = parameters.runtime.shots_exp
+    batch_size = parameters.crbm.gen_batch_size
+    num_batches = int(np.ceil(shots / batch_size).astype(int))
+    num_datasets = len(parameters.circuit.dts) * len(parameters.circuit.sampled_steps)
+    return (jax.ShapeDtypeStruct((num_datasets, num_batches, batch_size), np.uint8),)
+
+
 def prepare_crbm_models(parameters: Parameters) -> ConditionalRBM:
     """Return stacked (as pytrees) CRBM models."""
     crbm_models = []
@@ -62,7 +78,7 @@ def prepare_crbm_models(parameters: Parameters) -> ConditionalRBM:
     return crbm_models
 
 
-def prepare_rand_generators(parameters: Parameters) -> ConditionalRBM:
+def prepare_local_generators(parameters: Parameters) -> ConditionalRBM:
     """Return stacked (as pytrees) RandomExcitation generators."""
     ref_data = load_reco(parameters, etype='ref')
     crbm_models = []
@@ -79,6 +95,24 @@ def prepare_rand_generators(parameters: Parameters) -> ConditionalRBM:
 
     crbm_models = jax.tree.map(lambda *xs: jnp.stack(xs), *crbm_models)
     return crbm_models
+
+
+def prepare_random_generators(parameters: Parameters) -> ProductStateSampler:
+    """Return stacked (as pytrees) RandomExcitation generators."""
+    lattice = make_lattice(parameters)
+    num_qubits = lattice.num_active_plaquettes
+    generators = []
+    for idt, dt in enumerate(parameters.circuit.dts):
+        for istep in range(len(parameters.circuit.sampled_steps)):
+            seed_sample = parameters.crbm.seed_sample
+            seed_sample += idt * len(parameters.circuit.sampled_steps) + istep
+            rngs = nnx.Rngs(sample=seed_sample)
+            angle = -2. * parameters.lgt.plaquette_energy * dt
+            sampler = ProductStateSampler(num_qubits, angle, rngs=rngs)
+            generators.append(sampler)
+
+    generators = jax.tree.map(lambda *xs: jnp.stack(xs), *generators)
+    return generators
 
 
 def load_snapshot(parameters: Parameters, mode: str, generators: ConditionalRBM):
@@ -101,12 +135,12 @@ def load_snapshot(parameters: Parameters, mode: str, generators: ConditionalRBM)
 
 def diagonalize_in_mode(
     parameters: Parameters,
-    mode: str,  # 'cr' or 'lo'
+    mode: str,  # 'cr', 'lo', or 'cl'
     resume: bool = False,
     profile: Optional[str] = None,    
     logger: Optional[logging.Logger] = None
 ) -> float:
-    """Project and diagonalize the Hamiltonian with configuration recovery or random bitflips."""
+    """Project and diagonalize the Hamiltonian with CRBM or local configuration recovery."""
     logger = logger or logging.getLogger(__name__)
     proc_id = jax.process_index()
 
@@ -114,14 +148,21 @@ def diagonalize_in_mode(
         if proc_id == 0:
             logger.info(msg, *args)
 
-    loginfo('Padding and stacking data')
-    syndrome_data, plaq_data = prepare_data(parameters)
     if mode == 'cr':
         loginfo('Loading and stacking CRBM models')
         generators = prepare_crbm_models(parameters)
-    else:
+        generator_fn = generate_recovery
+        generator_args = prepare_data(parameters)
+    elif mode == 'lo':
         loginfo('Using the mean of reference circuit data as single-plaquette probability')
-        generators = prepare_rand_generators(parameters)
+        generators = prepare_local_generators(parameters)
+        generator_fn = generate_recovery
+        generator_args = prepare_data(parameters)
+    elif mode == 'cl':
+        loginfo('Sampling from product states')
+        generators = prepare_random_generators(parameters)
+        generator_fn = generate_random
+        generator_args = prepare_shape_struct(parameters)
 
     loginfo('Setting up the Hamiltonian')
     dual_lattice = make_dual_lattice(parameters)
@@ -130,7 +171,7 @@ def diagonalize_in_mode(
         add_padding=True
     )
     loginfo('Generating the PT core (<=%d excitations)', parameters.skqd.pt_core_max)
-    pt_core = make_pt_core(plaq_data.shape[-1], parameters.skqd.pt_core_max)
+    pt_core = make_pt_core(hamiltonian.num_qubits, parameters.skqd.pt_core_max)
 
     extension_fns = []
     for fname in parameters.skqd.extensions:
@@ -162,7 +203,7 @@ def diagonalize_in_mode(
     
     if profile:
         jax.profiler.start_trace(profile)
-    niter, history = iterative_sqd(hamiltonian, generators, syndrome_data, plaq_data,
+    niter, history = iterative_sqd(hamiltonian, generator_fn, generators, generator_args,
                                    parameters.skqd.num_gen, pt_core, parameters.skqd.carryover,
                                    parameters.skqd.max_iterations,
                                    parameters.skqd.energy_convergence,

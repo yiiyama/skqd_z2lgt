@@ -2,7 +2,7 @@
 from collections.abc import Callable
 import math
 import logging
-from typing import Optional
+from typing import Any, Optional
 import numpy as np
 from numpy.typing import NDArray
 import jax
@@ -64,7 +64,8 @@ def make_pt_core(
 
 
 @nnx.jit(static_argnames=['num_gen'])
-def _generate_recovery(generators, syndrome_data, plaq_data, num_gen):
+def generate_recovery(generators, num_gen, args):
+    """Generate states with a stack of CRBMs from batched syndrome and plaquette data."""
     @nnx.vmap
     @nnx.scan(in_axes=(nnx.Carry, 0, 0), out_axes=(nnx.Carry, 0))
     def generate_fn(generator, syndrome_batch, plaq_batch):
@@ -74,8 +75,41 @@ def _generate_recovery(generators, syndrome_data, plaq_data, num_gen):
         states = jnp.pad(states, [(0, 0), (0, 0), (1, 0)])
         return generator, states
 
+    syndrome_data, plaq_data = args
     shape = (np.prod(plaq_data.shape[:3]) * num_gen, plaq_data.shape[3] + 1)
     gen_states = generate_fn(generators, syndrome_data, plaq_data)[1].reshape(shape)
+    return jnp.packbits(gen_states, axis=1)
+
+
+class ProductStateSampler(nnx.Module):
+    """Simulated sampling of a product state Rx(theta)^n|0>."""
+    def __init__(self, num_qubits: int, angle: float, *, rngs: nnx.Rngs):
+        self.threshold = nnx.Param(
+            jnp.concatenate([
+                jnp.array([0.]),
+                jnp.full((num_qubits,), 0.5 - 0.5 * jnp.cos(angle))
+            ])
+        )
+        self.rngs = rngs
+
+    def sample(self, size: int) -> jax.Array:
+        shape = (size,) + self.threshold.shape
+        uvalues = jax.random.uniform(self.rngs.sample(), shape)
+        return jnp.asarray(uvalues < self.threshold, dtype=np.uint8)
+
+
+@nnx.jit(static_argnames=['num_gen'])
+def generate_random(generators, num_gen, args):
+    """Generate states with a stack of ProductStateSamplers."""
+    @nnx.vmap
+    @nnx.scan(in_axes=(nnx.Carry, 0), out_axes=(nnx.Carry, 0))
+    def generate_fn(generator, batch):
+        states = generator.sample(batch.shape[0] * num_gen)
+        return generator, states
+
+    shape_struct = args[0]
+    shape = (np.prod(shape_struct.shape) * num_gen, generators.threshold.shape[-1])
+    gen_states = generate_fn(generators, shape_struct)[1].reshape(shape)
     return jnp.packbits(gen_states, axis=1)
 
 
@@ -117,6 +151,7 @@ def compose_and_diagonalize(
 
 @nnx.jit(
     static_argnames=[
+        'generator_fn',
         'num_gen',
         'carryover_size',
         'num_iter',
@@ -127,9 +162,9 @@ def compose_and_diagonalize(
 )
 def iterative_sqd(
     hamiltonian: PauliSumXZ,
+    generator_fn: Callable,
     generators: nnx.Module,
-    syndrome_data: NDArray,
-    plaq_data: NDArray,
+    generator_args: tuple[Any, ...],
     num_gen: int,
     pt_core: NDArray,
     carryover_size: int,
@@ -149,7 +184,7 @@ def iterative_sqd(
         return jnp.logical_and(iteration < num_iter, not_converged)
 
     def run_and_record(_iteration, _history, _carryover, _generators, return_states=True):
-        gen_states = _generate_recovery(_generators, syndrome_data, plaq_data, num_gen)
+        gen_states = generator_fn(_generators, num_gen, generator_args)
         if extension is not None:
             gen_states = extension(gen_states)
         result = compose_and_diagonalize(hamiltonian, gen_states, pt_core, _carryover,
