@@ -10,8 +10,7 @@ from jax.sharding import AxisType
 from rqutils.ground_locg import ground_locg
 from skqd_z2lgt.orchestration.common import make_dual_hamiltonian
 from skqd_z2lgt.orchestration.open_output import open_output
-sys.path.append(str(Path(__file__).parents[1] / 'lib'))
-from ising_hamiltonian import make_apply_h
+from skqd_z2lgt.ising_hamiltonian import make_apply_h
 
 
 if __name__ == '__main__':
