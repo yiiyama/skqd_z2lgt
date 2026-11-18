@@ -187,6 +187,8 @@ def diagonalize_in_mode(
                 states_p = fn(states_p)
             return states_p
 
+    loginfo('Setting up snapshot callback')
+
     def callback(iteration, result, history, gens):
         if proc_id == 0:
             save_skqd_snapshot(parameters, mode, iteration, history, result[2],
@@ -195,7 +197,8 @@ def diagonalize_in_mode(
     if resume:
         init = load_snapshot(parameters, mode, generators)
     else:
-        initialize_skqd_snapshot(parameters, mode)
+        if proc_id == 0:
+            initialize_skqd_snapshot(parameters, mode)
         init = None
 
     loginfo('Starting SKQD iterations. Max iterations %d, convergence tolerance %.1e',
@@ -255,7 +258,7 @@ if __name__ == '__main__':
     parser.add_argument('mode')
     parser.add_argument('--resume', action='store_true')
     parser.add_argument('--niter', type=int)
-    parser.add_argument('--mpi', action='store_true')
+    parser.add_argument('--mpi', nargs='?', const=True)
     parser.add_argument('--gpus', help='CUDA_VISIBLE_DEVICES')
     parser.add_argument('--profile')
     parser.add_argument('--log-level', default='INFO')

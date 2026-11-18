@@ -232,9 +232,11 @@ def save_skqd_result(
 def initialize_skqd_snapshot(
     parameters: Parameters,
     mode: str,
-    backup: bool = True
+    backup: bool = True,
+    logger: Optional[logging.Logger] = None
 ):
     """Create the snapshot file."""
+    logger = logger or logging.getLogger(__name__)
     num_plaquettes = make_lattice(parameters).num_active_plaquettes
     num_bytes = np.ceil((num_plaquettes + 1) / 8).astype(int)
     num_generators = len(parameters.circuit.dts) * len(parameters.circuit.sampled_steps)
@@ -245,7 +247,9 @@ def initialize_skqd_snapshot(
         ibk = 1        
         while os.path.exists(backup_path):
             backup_path = backup_path.replace(f'_backup{ibk}.h5', f'_backup{ibk + 1}.h5')
+            ibk += 1            
         os.rename(path, backup_path)
+        logger.info('Snapshot file %s exists. Renamed to %s.', path, backup_path)
 
     with h5py.File(path, 'w', libver='latest') as out:
         out.create_dataset('iteration', data=np.array(-1, dtype=np.int32))
