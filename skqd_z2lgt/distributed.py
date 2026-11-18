@@ -33,7 +33,8 @@ def distributed_initialize(mpi: bool | str = False, gpus: str | list[int] | None
             # Free the local communicator resources
             local_comm.Free()
             if gpus:
-                local_device_ids = parse_gpus(gpus, astype=list)[local_rank]
+                gpus = parse_gpus(gpus, astype=list)
+                local_device_ids = [gpus[local_rank % len(gpus)]]
             else:
                 # We assume one process per GPU is created
                 local_device_ids = [local_rank]
